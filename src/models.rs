@@ -52,8 +52,8 @@ pub struct Site {
     pub site_type:                String,
     pub silence_threshold_ms:     Option<u32>,
     pub rms_silence_threshold_db: Option<f64>,
-    pub created_at:               Option<bson::DateTime>,
-    pub updated_at:               Option<bson::DateTime>,
+    pub created_at:               Option<bson::Bson>,
+    pub updated_at:               Option<bson::Bson>,
 }
 
 // ---------------------------------------------------------------------------
@@ -77,16 +77,20 @@ pub struct AudioRecording {
     pub id:            Option<ObjectId>,
 
     pub site_id:       String,
-    pub recorded:      bson::DateTime,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recorded:      Option<bson::Bson>,
 
     #[serde(rename = "type")]
-    pub rec_type:      String,   // "raw"
+    pub rec_type:      String,
 
     pub bucket:        String,
     pub object_key:    String,
 
-    pub created_at:    Option<bson::DateTime>,
-    pub updated_at:    Option<bson::DateTime>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_at:    Option<bson::Bson>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub updated_at:    Option<bson::Bson>,
 }
 
 // ---------------------------------------------------------------------------
@@ -104,13 +108,15 @@ pub struct ProcessingJob {
     pub status:             JobStatus,
     pub error:              Option<String>,
 
-    pub created_at:         bson::DateTime,
-    pub updated_at:         bson::DateTime,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_at:         Option<bson::Bson>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub updated_at:         Option<bson::Bson>,
 }
 
 impl ProcessingJob {
     pub fn new(audio_recording_id: ObjectId, site_id: String, stage: JobStage) -> Self {
-        let now = bson::DateTime::now();
+        let now = bson::Bson::DateTime(bson::DateTime::now());
         Self {
             id: None,
             audio_recording_id,
@@ -118,8 +124,8 @@ impl ProcessingJob {
             stage,
             status: JobStatus::NotStarted,
             error:  None,
-            created_at: now,
-            updated_at: now,
+            created_at: Some(now.clone()),
+            updated_at: Some(now),
         }
     }
 }
