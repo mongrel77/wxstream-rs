@@ -1,0 +1,13 @@
+/root/wxstream-rs/target/release/deps/yaml_rust2-22ab8ee4979f1c96.d: /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/yaml-rust2-0.8.1/src/lib.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/yaml-rust2-0.8.1/src/char_traits.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/yaml-rust2-0.8.1/src/debug.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/yaml-rust2-0.8.1/src/emitter.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/yaml-rust2-0.8.1/src/parser.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/yaml-rust2-0.8.1/src/scanner.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/yaml-rust2-0.8.1/src/yaml.rs
+
+/root/wxstream-rs/target/release/deps/libyaml_rust2-22ab8ee4979f1c96.rlib: /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/yaml-rust2-0.8.1/src/lib.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/yaml-rust2-0.8.1/src/char_traits.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/yaml-rust2-0.8.1/src/debug.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/yaml-rust2-0.8.1/src/emitter.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/yaml-rust2-0.8.1/src/parser.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/yaml-rust2-0.8.1/src/scanner.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/yaml-rust2-0.8.1/src/yaml.rs
+
+/root/wxstream-rs/target/release/deps/libyaml_rust2-22ab8ee4979f1c96.rmeta: /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/yaml-rust2-0.8.1/src/lib.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/yaml-rust2-0.8.1/src/char_traits.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/yaml-rust2-0.8.1/src/debug.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/yaml-rust2-0.8.1/src/emitter.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/yaml-rust2-0.8.1/src/parser.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/yaml-rust2-0.8.1/src/scanner.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/yaml-rust2-0.8.1/src/yaml.rs
+
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/yaml-rust2-0.8.1/src/lib.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/yaml-rust2-0.8.1/src/char_traits.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/yaml-rust2-0.8.1/src/debug.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/yaml-rust2-0.8.1/src/emitter.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/yaml-rust2-0.8.1/src/parser.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/yaml-rust2-0.8.1/src/scanner.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/yaml-rust2-0.8.1/src/yaml.rs:
