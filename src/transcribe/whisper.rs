@@ -5,12 +5,23 @@ use std::path::Path;
 
 use crate::{
     config::OpenAiConfig,
-    models::{SegmentTimestamp, TranscriptionDoc, WordTimestamp},
+    models::{SegmentTimestamp, WordTimestamp},
 };
 
 const WHISPER_URL: &str = "https://api.openai.com/v1/audio/transcriptions";
 const MIN_ADVANCE_S: f64 = 0.05;
 const FREEZE_RUN: usize = 8;
+
+/// Output from a Whisper transcription call.
+/// Mapped into a Transcription document by the caller.
+pub struct WhisperOutput {
+    pub raw_transcript:     Option<String>,
+    pub cleaned_transcript: Option<String>,
+    pub hallucination_chars: Option<i32>,
+    pub word_timestamps:    Vec<WordTimestamp>,
+    pub segment_timestamps: Vec<SegmentTimestamp>,
+    pub timestamp_source:   Option<String>,
+}
 
 // ---------------------------------------------------------------------------
 // Whisper API response types
@@ -48,7 +59,7 @@ pub async fn transcribe(
     cfg: &OpenAiConfig,
     audio_path: &Path,
     prompt: &str,
-) -> Result<TranscriptionDoc> {
+) -> Result<WhisperOutput> {
     let audio_bytes = tokio::fs::read(audio_path)
         .await
         .with_context(|| format!("Failed to read audio file: {}", audio_path.display()))?;
@@ -106,7 +117,7 @@ pub async fn transcribe(
 // Response processing — mirrors wxstream_pipeline.py logic exactly
 // ---------------------------------------------------------------------------
 
-fn process_whisper_response(whisper: WhisperResponse) -> Result<TranscriptionDoc> {
+fn process_whisper_response(whisper: WhisperResponse) -> Result<WhisperOutput> {
     let raw_text   = whisper.text.trim().to_string();
     let word_count = raw_text.split_whitespace().count();
 
@@ -191,7 +202,7 @@ fn process_whisper_response(whisper: WhisperResponse) -> Result<TranscriptionDoc
         );
     }
 
-    Ok(TranscriptionDoc {
+    Ok(WhisperOutput {
         raw_transcript:      Some(raw_text),
         cleaned_transcript:  Some(cleaned_text),
         hallucination_chars: Some(removed_chars as i32),

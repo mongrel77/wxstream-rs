@@ -1,27 +1,24 @@
 use anyhow::{Context, Result};
 use serde::Deserialize;
-use std::path::PathBuf;
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct Config {
-    pub mongodb:    MongoConfig,
-    pub s3:         S3Config,
-    pub openai:     OpenAiConfig,
-    pub anthropic:  AnthropicConfig,
-    pub jobs:       JobsConfig,
-    pub trim:       TrimConfig,
+    pub mongodb:       MongoConfig,
+    pub s3:            S3Config,
+    pub openai:        OpenAiConfig,
+    pub anthropic:     AnthropicConfig,
+    pub jobs:          JobsConfig,
+    pub trim:          TrimConfig,
     pub silence_strip: SilenceStripConfig,
-    pub stations:   StationsConfig,
 }
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct MongoConfig {
-    pub uri:                              String,
-    pub database:                         String,
-    pub audio_records_collection:         String,
-    pub weather_observations_collection:  String,
+    pub uri:      String,
+    pub database: String,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize, Clone)]
 pub struct S3Config {
     pub region:      String,
@@ -56,6 +53,7 @@ pub struct AnthropicConfig {
     pub max_tokens: u32,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize, Clone)]
 pub struct JobsConfig {
     pub transcribe_poll_interval_s: u64,
@@ -83,11 +81,6 @@ pub struct TrimConfig {
 pub struct SilenceStripConfig {
     pub threshold_db:  f64,
     pub min_silence_s: f64,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct StationsConfig {
-    pub json_path: PathBuf,
 }
 
 // ---------------------------------------------------------------------------

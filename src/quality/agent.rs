@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     config::AnthropicConfig,
-    models::{ParsedDoc, QualityDoc, QualityStatus, TranscriptionDoc},
+    models::{MetarEntry, QualityResult, QualityStatus},
 };
 
 // ---------------------------------------------------------------------------
@@ -36,12 +36,8 @@ struct ClaudeContent {
     text:         Option<String>,
 }
 
-// ---------------------------------------------------------------------------
-// Quality agent output schema
-// ---------------------------------------------------------------------------
-
 #[derive(Debug, Deserialize)]
-struct QualityAgentResult {
+struct AgentResult {
     confidence:     f64,
     flagged_fields: Vec<String>,
     notes:          String,
@@ -53,54 +49,46 @@ struct QualityAgentResult {
 // System prompt
 // ---------------------------------------------------------------------------
 
-const SYSTEM_PROMPT: &str = r#"You are a quality control agent for AWOS (Automated Weather Observing System) and ASOS (Automated Surface Observing System) weather data parsed from audio transcriptions.
+const SYSTEM_PROMPT: &str = r#"You are a quality control agent for AWOS/ASOS weather data parsed from audio transcriptions.
 
-Your job is to review parsed weather data alongside the raw transcript and:
-1. Identify any fields marked as "N/A" that could be extracted with more careful reading
-2. Flag implausible values (e.g. temperature of 85°C, altimeter of 50.00)
-3. Validate that METAR format is correct
-4. Check that values are internally consistent (e.g. dewpoint should not exceed temperature)
+Review the parsed weather data alongside the raw transcript and:
+1. Identify fields marked N/A that could be extracted with more careful reading
+2. Flag implausible values (e.g. temperature of 85C, altimeter of 50.00)
+3. Validate METAR format correctness
+4. Check internal consistency (dewpoint must not exceed temperature)
 
-Valid ranges for reference:
+Valid ranges:
 - Wind direction: 000-360 degrees
 - Wind speed: 0-100 knots (gusts up to 120)
-- Visibility: 0-10 SM (can be >10 with prefix)
+- Visibility: 0-10 SM (can be >10 with > prefix)
 - Sky height: 100-25000 ft
-- Temperature: -60°C to +50°C
-- Dewpoint: -80°C to +35°C (always <= temperature)
+- Temperature: -60C to +50C
+- Dewpoint: -80C to +35C (always <= temperature)
 - Altimeter: 28.00-31.00 inHg
 
-You must respond ONLY with a valid JSON object. No preamble, no markdown, no explanation outside the JSON.
-
-Required JSON schema:
+Respond ONLY with valid JSON, no preamble or markdown:
 {
-  "confidence": <float 0.0-1.0, overall confidence in parsed data quality>,
-  "flagged_fields": [<list of field names with issues, e.g. "visibility", "altimeter">],
-  "notes": "<brief explanation of findings>",
-  "corrections": <null or object with field -> corrected_value for high-confidence corrections>,
-  "needs_review": <true if human should review, false if data looks good>
+  "confidence": <float 0.0-1.0>,
+  "flagged_fields": [<field names with issues>],
+  "notes": "<brief explanation>",
+  "corrections": null or {<field>: <corrected_value>},
+  "needs_review": <true|false>
 }
 
-Flag for review (needs_review: true) when:
-- confidence < 0.7
-- Any field has an implausible value
-- Dewpoint exceeds temperature
-- METAR format appears malformed
-- Multiple N/A fields that should have values"#;
+Flag for review when: confidence < 0.7, implausible values, dewpoint > temperature, malformed METAR, or multiple N/A fields that should have values."#;
 
 // ---------------------------------------------------------------------------
 // Public entry point
 // ---------------------------------------------------------------------------
 
-/// Run the Claude quality agent on a parsed record.
-/// Returns the quality doc and the recommended status.
 pub async fn run_quality_check(
-    cfg:           &AnthropicConfig,
-    station_id:    &str,
-    transcription: &TranscriptionDoc,
-    parsed:        &ParsedDoc,
-) -> Result<(QualityDoc, QualityStatus)> {
-    let user_content = build_user_prompt(station_id, transcription, parsed);
+    cfg:                &AnthropicConfig,
+    site_id:            &str,
+    raw_transcript:     &str,
+    cleaned_transcript: Option<&str>,
+    metar:              &MetarEntry,
+) -> Result<(QualityResult, QualityStatus)> {
+    let user_content = build_user_prompt(site_id, raw_transcript, cleaned_transcript, metar);
 
     let request = ClaudeRequest {
         model:      cfg.model.clone(),
@@ -134,24 +122,20 @@ pub async fn run_quality_check(
         .await
         .context("Failed to parse Claude response")?;
 
-    let text = claude_resp
-        .content
-        .iter()
+    let text = claude_resp.content.iter()
         .filter(|c| c.content_type == "text")
         .filter_map(|c| c.text.as_ref())
         .cloned()
         .collect::<Vec<_>>()
         .join("");
 
-    // Strip markdown fences if present
-    let clean = text
-        .trim()
+    let clean = text.trim()
         .trim_start_matches("```json")
         .trim_start_matches("```")
         .trim_end_matches("```")
         .trim();
 
-    let result: QualityAgentResult = serde_json::from_str(clean)
+    let result: AgentResult = serde_json::from_str(clean)
         .with_context(|| format!("Failed to parse quality agent JSON: {}", clean))?;
 
     let status = if result.needs_review {
@@ -160,7 +144,7 @@ pub async fn run_quality_check(
         QualityStatus::Validated
     };
 
-    let quality_doc = QualityDoc {
+    let quality_result = QualityResult {
         reviewed_at:    Some(chrono::Utc::now()),
         model:          Some(cfg.model.clone()),
         confidence:     Some(result.confidence),
@@ -171,7 +155,7 @@ pub async fn run_quality_check(
         human_notes:    None,
     };
 
-    Ok((quality_doc, status))
+    Ok((quality_result, status))
 }
 
 // ---------------------------------------------------------------------------
@@ -179,26 +163,19 @@ pub async fn run_quality_check(
 // ---------------------------------------------------------------------------
 
 fn build_user_prompt(
-    station_id:    &str,
-    transcription: &TranscriptionDoc,
-    parsed:        &ParsedDoc,
+    site_id:            &str,
+    raw_transcript:     &str,
+    cleaned_transcript: Option<&str>,
+    metar:              &MetarEntry,
 ) -> String {
-    let transcript_text = transcription
-        .cleaned_transcript
-        .as_deref()
-        .or(transcription.raw_transcript.as_deref())
-        .unwrap_or("(not available)");
-
-    let parsed_json = serde_json::to_string_pretty(parsed)
+    let transcript_text = cleaned_transcript.unwrap_or(raw_transcript);
+    let metar_json = serde_json::to_string_pretty(metar)
         .unwrap_or_else(|_| "(serialization error)".to_string());
 
     format!(
-        "Station: {station_id}\n\n\
-        RAW TRANSCRIPT:\n{transcript}\n\n\
-        PARSED DATA:\n{parsed}\n\n\
-        Please review the parsed data for accuracy and completeness.",
-        station_id = station_id,
+        "Site: {site_id}\n\nTRANSCRIPT:\n{transcript}\n\nPARSED METAR DATA:\n{parsed}\n\nPlease review for accuracy.",
+        site_id    = site_id,
         transcript = transcript_text,
-        parsed     = parsed_json,
+        parsed     = metar_json,
     )
 }

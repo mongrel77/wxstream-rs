@@ -132,9 +132,7 @@ pub fn normalize(text: &str) -> String {
     static THOU_SEP_DASH: Lazy<Regex> = Lazy::new(|| Regex::new(r"\b(\d{1,2})-000\b").unwrap());
     t = THOU_SEP_DASH.replace_all(&t, "${1}000").to_string();
 
-    // Spoken decimal point
-    static DECIMAL: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)(?<=\d)\s+point\s+(?=\d)").unwrap());
-    // Use a simpler approach since lookbehind isn't supported in Rust regex
+    // Spoken decimal point: '128 point 45' -> '128.45'
     static DECIMAL2: Lazy<Regex> = Lazy::new(|| Regex::new(r"(\d)\s+[Pp]oint\s+(\d)").unwrap());
     t = DECIMAL2.replace_all(&t, "$1.$2").to_string();
 

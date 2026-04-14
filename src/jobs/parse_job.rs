@@ -4,16 +4,14 @@ use tokio::time::{sleep, Duration};
 use crate::{
     config::Config,
     db::Db,
-    models::{Station, WeatherObservation},
+    models::{MetarEntry, QualityStatus, Site, SkyCondition, WindEntry},
     parse::{self, ParseInput},
 };
 
-/// Continuously polls for "transcribed" records, parses weather data,
-/// writes WeatherObservation, signals trim and quality jobs.
 pub async fn run(
-    cfg:      Arc<Config>,
-    db:       Arc<Db>,
-    stations: Arc<std::collections::HashMap<String, Station>>,
+    cfg:   Arc<Config>,
+    db:    Arc<Db>,
+    sites: Arc<std::collections::HashMap<String, Site>>,
 ) {
     let poll_interval = Duration::from_secs(cfg.jobs.parse_poll_interval_s);
     let concurrency   = cfg.jobs.parse_concurrency;
@@ -24,74 +22,92 @@ pub async fn run(
     loop {
         let mut claimed = 0;
         while claimed < concurrency {
-            match db.claim_for_parsing().await {
-                Ok(Some(record)) => {
+            match db.claim_parse_job().await {
+                Ok(Some((job, tx))) => {
                     claimed += 1;
-                    let cfg      = cfg.clone();
-                    let db       = db.clone();
-                    let stations = stations.clone();
-                    let sem      = semaphore.clone();
+                    let cfg   = cfg.clone();
+                    let db    = db.clone();
+                    let sites = sites.clone();
+                    let sem   = semaphore.clone();
 
                     tokio::spawn(async move {
-                        let _permit    = sem.acquire_owned().await.unwrap();
-                        let id         = record.id.unwrap();
-                        let station_id = record.station_id.clone();
+                        let _permit  = sem.acquire_owned().await.unwrap();
+                        let job_id   = job.id.unwrap();
+                        let tx_id    = tx.id.unwrap();
+                        let rec_id   = job.audio_recording_id;
+                        let site_id  = job.site_id.clone();
 
-                        tracing::info!("[{}] Parsing transcript", station_id);
+                        tracing::info!("[{}] Parsing transcript", site_id);
 
-                        let raw_transcript = match &record.transcription.cleaned_transcript {
-                            Some(t) => t.clone(),
-                            None => match &record.transcription.raw_transcript {
-                                Some(t) => t.clone(),
-                                None => {
-                                    let _ = db.mark_parse_failed(id, "No transcript text available").await;
-                                    return;
-                                }
-                            }
-                        };
+                        let raw_transcript = tx.cleaned_transcript
+                            .as_deref()
+                            .unwrap_or(&tx.raw_transcript)
+                            .to_string();
 
-                        // Get station metadata
-                        let (location, station_type) = stations.get(station_id.as_str())
-                            .map(|s| (s.location.clone(), s.stn_type.clone()))
-                            .unwrap_or_else(|| (station_id.clone(), "AWOS".to_string()));
+                        let (location, station_type) = sites.get(site_id.as_str())
+                            .map(|s| (s.loc_name.clone(), s.site_type.clone()))
+                            .unwrap_or_else(|| (site_id.clone(), "AWOS".to_string()));
 
                         let input = ParseInput {
                             raw_transcript: &raw_transcript,
-                            station_id:     &station_id,
+                            station_id:     &site_id,
                             location:       &location,
                             station_type:   &station_type,
-                            recorded_at:    record.recorded_at,
+                            recorded_at:    tx.created_at,
                         };
 
                         let parsed = parse::parse(&input);
 
                         tracing::info!(
-                            "[{}] Parsed: time={} wind={} vis={} alt={}",
-                            station_id,
+                            "[{}] Parsed: time={} vis={} alt={}",
+                            site_id,
                             parsed.time.as_deref().unwrap_or("N/A"),
-                            parsed.wind.as_ref().and_then(|w| w.raw.as_deref()).unwrap_or("N/A"),
                             parsed.visibility_sm.as_deref().unwrap_or("N/A"),
                             parsed.altimeter_inhg.as_deref().unwrap_or("N/A"),
                         );
 
-                        // Write parsed data back to audio_records + signal downstream
-                        if let Err(e) = db.mark_parsed(id, &parsed).await {
-                            tracing::error!("[{}] Failed to write parsed data: {}", station_id, e);
-                            return;
-                        }
+                        let wind = parsed.wind.map(|w| WindEntry {
+                            direction: w.direction,
+                            speed_kt:  w.speed_kt,
+                            gust_kt:   w.gust_kt,
+                            variable:  w.variable,
+                            calm:      w.calm,
+                            raw:       w.raw,
+                            metar:     w.metar,
+                        });
 
-                        // Create initial WeatherObservation document
-                        let mut updated_record = record.clone();
-                        updated_record.parsed = Some(parsed);
+                        let sky: Vec<SkyCondition> = parsed.sky.into_iter()
+                            .map(|s| SkyCondition { coverage: s.coverage, height_ft: s.height_ft })
+                            .collect();
 
-                        let obs = WeatherObservation::from_audio_record(&updated_record, id);
-                        match db.upsert_weather_observation(&obs).await {
-                            Ok(obs_id) => {
-                                tracing::info!("[{}] WeatherObservation upserted: {}", station_id, obs_id);
-                            }
-                            Err(e) => {
-                                tracing::error!("[{}] Failed to upsert WeatherObservation: {}", station_id, e);
-                            }
+                        let now = chrono::Utc::now();
+                        let metar = MetarEntry {
+                            id:                  None,
+                            audio_recording_id:  rec_id,
+                            transcription_id:    tx_id,
+                            site_id:             site_id.clone(),
+                            observed_at:         tx.created_at,
+                            time:                parsed.time,
+                            wind,
+                            visibility_sm:       parsed.visibility_sm,
+                            sky,
+                            temperature_c:       parsed.temperature_c,
+                            dewpoint_c:          parsed.dewpoint_c,
+                            altimeter_inhg:      parsed.altimeter_inhg,
+                            density_altitude_ft: parsed.density_altitude_ft,
+                            phenomena:           parsed.phenomena,
+                            remarks:             parsed.remarks,
+                            metar:               parsed.metar,
+                            selected_loop_time:  parsed.selected_loop_time,
+                            quality_status:      QualityStatus::Pending,
+                            quality:             None,
+                            created_at:          now,
+                            updated_at:          now,
+                        };
+
+                        if let Err(e) = db.complete_parse_job(job_id, &metar).await {
+                            tracing::error!("[{}] Failed to complete parse job: {}", site_id, e);
+                            let _ = db.fail_job(job_id, &e.to_string()).await;
                         }
                     });
                 }
@@ -102,7 +118,6 @@ pub async fn run(
                 }
             }
         }
-
         sleep(poll_interval).await;
     }
 }

@@ -1,24 +1,27 @@
 use anyhow::{Context, Result};
 use bson::{doc, oid::ObjectId, DateTime as BsonDateTime};
 use chrono::Utc;
+use futures::TryStreamExt;
 use mongodb::{
-    options::{ClientOptions, FindOneAndUpdateOptions, ReturnDocument},
-    Client, Collection, Database,
+    options::{ClientOptions, FindOneAndUpdateOptions, IndexOptions, ReturnDocument},
+    Client, Collection, Database, IndexModel,
 };
 
 use crate::{
     config::MongoConfig,
-    models::{AudioRecord, QualityStatus, WeatherObservation},
+    models::{
+        AudioRecording, JobStage, JobStatus, MetarEntry,
+        ProcessingJob, QualityResult, QualityStatus, Site, Transcription,
+    },
 };
 
 // ---------------------------------------------------------------------------
-// Handle — wraps the MongoDB client and exposes typed collection accessors
+// Db handle
 // ---------------------------------------------------------------------------
 
 #[derive(Clone, Debug)]
 pub struct Db {
     pub database: Database,
-    cfg: MongoConfig,
 }
 
 impl Db {
@@ -30,401 +33,440 @@ impl Db {
         let client = Client::with_options(opts)
             .context("Failed to create MongoDB client")?;
 
-        // Ping to verify connectivity
         client
             .database("admin")
             .run_command(doc! { "ping": 1 }, None)
             .await
-            .context("MongoDB ping failed — check URI and network")?;
+            .context("MongoDB ping failed")?;
 
-        tracing::info!("Connected to MongoDB Atlas");
-
-        let database = client.database(&cfg.database);
-        Ok(Self { database, cfg: cfg.clone() })
-    }
-
-    pub fn audio_records(&self) -> Collection<AudioRecord> {
-        self.database.collection(&self.cfg.audio_records_collection)
-    }
-
-    pub fn weather_observations(&self) -> Collection<WeatherObservation> {
-        self.database
-            .collection(&self.cfg.weather_observations_collection)
+        tracing::info!("Connected to MongoDB Atlas (db: {})", cfg.database);
+        Ok(Self { database: client.database(&cfg.database) })
     }
 
     // -----------------------------------------------------------------------
-    // Index setup — call once at startup
+    // Collection accessors
+    // -----------------------------------------------------------------------
+
+    pub fn audio_recordings(&self) -> Collection<AudioRecording> {
+        self.database.collection("audio_recordings")
+    }
+
+    pub fn processing_jobs(&self) -> Collection<ProcessingJob> {
+        self.database.collection("processing_jobs")
+    }
+
+    pub fn transcriptions(&self) -> Collection<Transcription> {
+        self.database.collection("transcriptions")
+    }
+
+    pub fn metar_entries(&self) -> Collection<MetarEntry> {
+        self.database.collection("metar_entries")
+    }
+
+    pub fn sites(&self) -> Collection<Site> {
+        self.database.collection("sites")
+    }
+
+    // -----------------------------------------------------------------------
+    // Index setup
     // -----------------------------------------------------------------------
 
     pub async fn ensure_indexes(&self) -> Result<()> {
-        use mongodb::IndexModel;
-        use mongodb::options::IndexOptions;
-
-        let ar = self.audio_records();
-
-        // Compound index for job polling — most critical for performance
-        ar.create_index(
+        // audio_recordings — scanner polls for type "raw"
+        self.audio_recordings().create_index(
             IndexModel::builder()
-                .keys(doc! { "raw_status": 1, "created_at": 1 })
-                .options(IndexOptions::builder().name("raw_status_created".to_string()).build())
+                .keys(doc! { "type": 1, "created_at": 1 })
+                .options(IndexOptions::builder().name("type_created".to_string()).build())
                 .build(),
             None,
-        )
-        .await?;
+        ).await?;
 
-        ar.create_index(
+        // processing_jobs — job workers poll by stage + status
+        self.processing_jobs().create_index(
             IndexModel::builder()
-                .keys(doc! { "trim_status": 1, "updated_at": 1 })
-                .options(IndexOptions::builder().name("trim_status_updated".to_string()).build())
+                .keys(doc! { "stage": 1, "status": 1, "created_at": 1 })
+                .options(IndexOptions::builder().name("stage_status_created".to_string()).build())
                 .build(),
             None,
-        )
-        .await?;
+        ).await?;
 
-        ar.create_index(
+        // Unique index — prevent duplicate jobs for same recording + stage
+        self.processing_jobs().create_index(
             IndexModel::builder()
-                .keys(doc! { "quality_status": 1, "updated_at": 1 })
-                .options(IndexOptions::builder().name("quality_status_updated".to_string()).build())
-                .build(),
-            None,
-        )
-        .await?;
-
-        ar.create_index(
-            IndexModel::builder()
-                .keys(doc! { "station_id": 1, "recorded_at": -1 })
-                .options(IndexOptions::builder().name("station_recorded".to_string()).build())
-                .build(),
-            None,
-        )
-        .await?;
-
-        // Unique index on raw_s3_key — prevents duplicate processing
-        ar.create_index(
-            IndexModel::builder()
-                .keys(doc! { "raw_s3_key": 1 })
+                .keys(doc! { "audio_recording_id": 1, "stage": 1 })
                 .options(
                     IndexOptions::builder()
                         .unique(true)
-                        .name("raw_s3_key_unique".to_string())
+                        .name("recording_stage_unique".to_string())
                         .build(),
                 )
                 .build(),
             None,
-        )
-        .await?;
+        ).await?;
 
-        let wo = self.weather_observations();
-        wo.create_index(
+        self.transcriptions().create_index(
             IndexModel::builder()
-                .keys(doc! { "station_id": 1, "observed_at": -1 })
-                .options(IndexOptions::builder().name("station_observed".to_string()).build())
+                .keys(doc! { "audio_recording_id": 1 })
+                .options(IndexOptions::builder().name("audio_recording_id".to_string()).build())
                 .build(),
             None,
-        )
-        .await?;
+        ).await?;
 
-        wo.create_index(
+        self.metar_entries().create_index(
             IndexModel::builder()
-                .keys(doc! { "quality_status": 1 })
-                .options(IndexOptions::builder().name("quality_status".to_string()).build())
+                .keys(doc! { "audio_recording_id": 1 })
+                .options(IndexOptions::builder().name("audio_recording_id".to_string()).build())
                 .build(),
             None,
-        )
-        .await?;
+        ).await?;
+
+        self.metar_entries().create_index(
+            IndexModel::builder()
+                .keys(doc! { "site_id": 1, "observed_at": -1 })
+                .options(IndexOptions::builder().name("site_observed".to_string()).build())
+                .build(),
+            None,
+        ).await?;
 
         tracing::info!("MongoDB indexes ensured");
         Ok(())
     }
 
     // -----------------------------------------------------------------------
-    // Transcribe job helpers
+    // Site loading
     // -----------------------------------------------------------------------
 
-    /// Atomically claim one "not_processed" record for transcription.
-    /// Uses findOneAndUpdate to prevent two workers claiming the same record.
-    pub async fn claim_for_transcription(&self) -> Result<Option<AudioRecord>> {
+    pub async fn load_sites(&self) -> Result<std::collections::HashMap<String, Site>> {
+        let mut cursor = self.sites().find(None, None).await?;
+        let mut map    = std::collections::HashMap::new();
+        while let Some(site) = cursor.try_next().await? {
+            map.insert(site.id.clone(), site);
+        }
+        tracing::info!("Loaded {} sites from database", map.len());
+        Ok(map)
+    }
+
+    // -----------------------------------------------------------------------
+    // Scanner — finds unqueued raw recordings and creates transcribe jobs
+    // -----------------------------------------------------------------------
+
+    /// Find raw audio_recordings that don't yet have a transcribe job.
+    pub async fn find_unqueued_raw_recordings(&self) -> Result<Vec<AudioRecording>> {
+        // Get all audio_recording_ids that already have a transcribe job
+        let existing: Vec<ObjectId> = self.processing_jobs()
+            .find(doc! { "stage": "transcribe" }, None)
+            .await?
+            .try_collect::<Vec<_>>()
+            .await?
+            .into_iter()
+            .map(|j| j.audio_recording_id)
+            .collect();
+
+        // Find raw recordings not in that list
+        let filter = if existing.is_empty() {
+            doc! { "type": "raw" }
+        } else {
+            doc! { "type": "raw", "_id": { "$nin": existing } }
+        };
+
+        let recordings = self.audio_recordings()
+            .find(filter, None)
+            .await?
+            .try_collect::<Vec<_>>()
+            .await?;
+
+        Ok(recordings)
+    }
+
+    /// Insert a processing job. Ignores duplicate key errors (job already exists).
+    pub async fn create_job(&self, job: &ProcessingJob) -> Result<()> {
+        match self.processing_jobs().insert_one(job, None).await {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                // Ignore duplicate key error (unique index on recording_id + stage)
+                if e.to_string().contains("11000") {
+                    Ok(())
+                } else {
+                    Err(e.into())
+                }
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Transcribe job
+    // -----------------------------------------------------------------------
+
+    pub async fn claim_transcribe_job(&self) -> Result<Option<(ProcessingJob, AudioRecording)>> {
         let opts = FindOneAndUpdateOptions::builder()
             .sort(doc! { "created_at": 1 })
             .return_document(ReturnDocument::After)
             .build();
 
-        let result = self
-            .audio_records()
+        let job = self.processing_jobs()
             .find_one_and_update(
-                doc! { "raw_status": "not_processed" },
-                doc! {
-                    "$set": {
-                        "raw_status": "processing",
-                        "updated_at": BsonDateTime::from_millis(Utc::now().timestamp_millis()),
-                    }
-                },
+                doc! { "stage": "transcribe", "status": "not_started" },
+                doc! { "$set": {
+                    "status":     "pending",
+                    "updated_at": BsonDateTime::from_millis(Utc::now().timestamp_millis()),
+                }},
                 opts,
             )
             .await
-            .context("claim_for_transcription failed")?;
+            .context("claim_transcribe_job failed")?;
 
-        Ok(result)
+        let job = match job { Some(j) => j, None => return Ok(None) };
+
+        let recording = self.audio_recordings()
+            .find_one(doc! { "_id": job.audio_recording_id }, None)
+            .await?
+            .context("Audio recording not found for transcribe job")?;
+
+        Ok(Some((job, recording)))
     }
 
-    /// Mark a record as successfully transcribed.
-    pub async fn mark_transcribed(
+    pub async fn complete_transcribe_job(
         &self,
-        id: ObjectId,
-        transcription: &crate::models::TranscriptionDoc,
+        job_id:       ObjectId,
+        recording_id: ObjectId,
+        site_id:      &str,
+        tx:           &Transcription,
     ) -> Result<()> {
-        let tx_bson = bson::to_bson(transcription)?;
-        self.audio_records()
-            .update_one(
-                doc! { "_id": id },
-                doc! {
-                    "$set": {
-                        "raw_status":    "transcribed",
-                        "transcription": tx_bson,
-                        "updated_at":    BsonDateTime::from_millis(Utc::now().timestamp_millis()),
-                        "error":         bson::Bson::Null,
-                    }
-                },
-                None,
-            )
-            .await?;
+        // Insert transcription
+        self.transcriptions().insert_one(tx, None).await?;
+
+        let now = BsonDateTime::from_millis(Utc::now().timestamp_millis());
+
+        // Mark transcribe job done
+        self.processing_jobs().update_one(
+            doc! { "_id": job_id },
+            doc! { "$set": { "status": "done", "updated_at": now.clone() }},
+            None,
+        ).await?;
+
+        // Create parse job
+        let parse_job = ProcessingJob::new(recording_id, site_id.to_string(), JobStage::Parse);
+        self.create_job(&parse_job).await?;
+
+        // Create trim job
+        let trim_job = ProcessingJob::new(recording_id, site_id.to_string(), JobStage::Trim);
+        self.create_job(&trim_job).await?;
+
+        tracing::info!("[{}] Transcribe job done — parse + trim jobs created", site_id);
         Ok(())
     }
 
-    /// Mark a record as failed during transcription.
-    pub async fn mark_transcription_failed(&self, id: ObjectId, error: &str) -> Result<()> {
-        self.audio_records()
-            .update_one(
-                doc! { "_id": id },
-                doc! {
-                    "$set": {
-                        "raw_status": "failed",
-                        "error":      error,
-                        "updated_at": BsonDateTime::from_millis(Utc::now().timestamp_millis()),
-                    }
-                },
-                None,
-            )
-            .await?;
+    pub async fn fail_job(&self, job_id: ObjectId, error: &str) -> Result<()> {
+        self.processing_jobs().update_one(
+            doc! { "_id": job_id },
+            doc! { "$set": {
+                "status":     "failed",
+                "error":      error,
+                "updated_at": BsonDateTime::from_millis(Utc::now().timestamp_millis()),
+            }},
+            None,
+        ).await?;
         Ok(())
     }
 
     // -----------------------------------------------------------------------
-    // Parse job helpers
+    // Parse job
     // -----------------------------------------------------------------------
 
-    /// Atomically claim one "transcribed" record for parsing.
-    pub async fn claim_for_parsing(&self) -> Result<Option<AudioRecord>> {
+    pub async fn claim_parse_job(&self) -> Result<Option<(ProcessingJob, Transcription)>> {
         let opts = FindOneAndUpdateOptions::builder()
-            .sort(doc! { "updated_at": 1 })
+            .sort(doc! { "created_at": 1 })
             .return_document(ReturnDocument::After)
             .build();
 
-        let result = self
-            .audio_records()
+        let job = self.processing_jobs()
             .find_one_and_update(
-                doc! { "raw_status": "transcribed" },
-                doc! {
-                    "$set": {
-                        "raw_status": "parsing",
-                        "updated_at": BsonDateTime::from_millis(Utc::now().timestamp_millis()),
-                    }
-                },
+                doc! { "stage": "parse", "status": "not_started" },
+                doc! { "$set": {
+                    "status":     "pending",
+                    "updated_at": BsonDateTime::from_millis(Utc::now().timestamp_millis()),
+                }},
                 opts,
             )
             .await
-            .context("claim_for_parsing failed")?;
+            .context("claim_parse_job failed")?;
 
-        Ok(result)
+        let job = match job { Some(j) => j, None => return Ok(None) };
+
+        let tx = self.transcriptions()
+            .find_one(doc! { "audio_recording_id": job.audio_recording_id }, None)
+            .await?
+            .context("Transcription not found for parse job")?;
+
+        Ok(Some((job, tx)))
     }
 
-    /// Write parsed weather data and signal downstream jobs.
-    pub async fn mark_parsed(
+    pub async fn complete_parse_job(
         &self,
-        id: ObjectId,
-        parsed: &crate::models::ParsedDoc,
+        job_id: ObjectId,
+        metar:  &MetarEntry,
     ) -> Result<()> {
-        let parsed_bson = bson::to_bson(parsed)?;
-        self.audio_records()
-            .update_one(
-                doc! { "_id": id },
-                doc! {
-                    "$set": {
-                        "raw_status":     "parsed",
-                        "parsed":          parsed_bson,
-                        "trim_status":    "pending",
-                        "quality_status": "pending",
-                        "updated_at":     BsonDateTime::from_millis(Utc::now().timestamp_millis()),
-                        "error":          bson::Bson::Null,
-                    }
-                },
-                None,
-            )
-            .await?;
-        Ok(())
-    }
+        self.metar_entries().insert_one(metar, None).await?;
 
-    pub async fn mark_parse_failed(&self, id: ObjectId, error: &str) -> Result<()> {
-        self.audio_records()
-            .update_one(
-                doc! { "_id": id },
-                doc! {
-                    "$set": {
-                        "raw_status": "parse_failed",
-                        "error":      error,
-                        "updated_at": BsonDateTime::from_millis(Utc::now().timestamp_millis()),
-                    }
-                },
-                None,
-            )
-            .await?;
+        self.processing_jobs().update_one(
+            doc! { "_id": job_id },
+            doc! { "$set": {
+                "status":     "done",
+                "updated_at": BsonDateTime::from_millis(Utc::now().timestamp_millis()),
+            }},
+            None,
+        ).await?;
+
         Ok(())
     }
 
     // -----------------------------------------------------------------------
-    // Trim job helpers
+    // Trim job
     // -----------------------------------------------------------------------
 
-    /// Atomically claim one "pending" trim record.
-    pub async fn claim_for_trim(&self) -> Result<Option<AudioRecord>> {
+    pub async fn claim_trim_job(
+        &self,
+    ) -> Result<Option<(ProcessingJob, AudioRecording, Transcription, Option<String>)>> {
         let opts = FindOneAndUpdateOptions::builder()
-            .sort(doc! { "updated_at": 1 })
+            .sort(doc! { "created_at": 1 })
             .return_document(ReturnDocument::After)
             .build();
 
-        let result = self
-            .audio_records()
+        let job = self.processing_jobs()
             .find_one_and_update(
-                doc! { "trim_status": "pending", "raw_status": "parsed" },
-                doc! {
-                    "$set": {
-                        "trim_status": "processing",
-                        "updated_at":  BsonDateTime::from_millis(Utc::now().timestamp_millis()),
-                    }
-                },
+                doc! { "stage": "trim", "status": "not_started" },
+                doc! { "$set": {
+                    "status":     "pending",
+                    "updated_at": BsonDateTime::from_millis(Utc::now().timestamp_millis()),
+                }},
                 opts,
             )
             .await
-            .context("claim_for_trim failed")?;
+            .context("claim_trim_job failed")?;
 
-        Ok(result)
+        let job = match job { Some(j) => j, None => return Ok(None) };
+
+        let recording = self.audio_recordings()
+            .find_one(doc! { "_id": job.audio_recording_id }, None)
+            .await?
+            .context("Audio recording not found for trim job")?;
+
+        let tx = self.transcriptions()
+            .find_one(doc! { "audio_recording_id": job.audio_recording_id }, None)
+            .await?
+            .context("Transcription not found for trim job")?;
+
+        // Get selected_loop_time from metar entry if available
+        let selected_loop_time = self.metar_entries()
+            .find_one(doc! { "audio_recording_id": job.audio_recording_id }, None)
+            .await?
+            .and_then(|m| m.selected_loop_time);
+
+        Ok(Some((job, recording, tx, selected_loop_time)))
     }
 
-    pub async fn mark_trim_completed(
+    pub async fn complete_trim_job(
         &self,
-        id: ObjectId,
-        trimmed_s3_key: &str,
+        job_id:         ObjectId,
+        recording_id:   ObjectId,
+        trimmed_bucket: &str,
+        trimmed_key:    &str,
     ) -> Result<()> {
-        self.audio_records()
-            .update_one(
-                doc! { "_id": id },
-                doc! {
-                    "$set": {
-                        "trim_status":    "completed",
-                        "trimmed_s3_key": trimmed_s3_key,
-                        "updated_at":     BsonDateTime::from_millis(Utc::now().timestamp_millis()),
-                    }
-                },
-                None,
-            )
-            .await?;
-        Ok(())
-    }
+        // Append a "trimmed" entry to audio_recordings
+        // We insert a new document with type "trimmed" referencing the original
+        let now = BsonDateTime::from_millis(Utc::now().timestamp_millis());
 
-    pub async fn mark_trim_failed(&self, id: ObjectId, error: &str) -> Result<()> {
-        self.audio_records()
+        self.database.collection::<bson::Document>("audio_recordings")
             .update_one(
-                doc! { "_id": id },
-                doc! {
-                    "$set": {
-                        "trim_status": "failed",
-                        "error":       error,
-                        "updated_at":  BsonDateTime::from_millis(Utc::now().timestamp_millis()),
+                doc! { "_id": recording_id },
+                doc! { "$push": {
+                    "trimmed": {
+                        "bucket":     trimmed_bucket,
+                        "object_key": trimmed_key,
+                        "created_at": now.clone(),
                     }
-                },
+                }},
                 None,
             )
             .await?;
+
+        // Mark trim job done
+        self.processing_jobs().update_one(
+            doc! { "_id": job_id },
+            doc! { "$set": {
+                "status":     "done",
+                "updated_at": now,
+            }},
+            None,
+        ).await?;
+
         Ok(())
     }
 
     // -----------------------------------------------------------------------
-    // Quality job helpers
+    // Quality job
     // -----------------------------------------------------------------------
 
-    /// Atomically claim one "pending" quality record.
-    pub async fn claim_for_quality(&self) -> Result<Option<AudioRecord>> {
+    pub async fn claim_quality_job(&self) -> Result<Option<(ProcessingJob, MetarEntry, Transcription)>> {
         let opts = FindOneAndUpdateOptions::builder()
-            .sort(doc! { "updated_at": 1 })
+            .sort(doc! { "created_at": 1 })
             .return_document(ReturnDocument::After)
             .build();
 
-        let result = self
-            .audio_records()
+        let job = self.processing_jobs()
             .find_one_and_update(
-                doc! { "quality_status": "pending", "raw_status": "parsed" },
-                doc! {
-                    "$set": {
-                        "quality_status": "processing",
-                        "updated_at":     BsonDateTime::from_millis(Utc::now().timestamp_millis()),
-                    }
-                },
+                doc! { "stage": "quality", "status": "not_started" },
+                doc! { "$set": {
+                    "status":     "pending",
+                    "updated_at": BsonDateTime::from_millis(Utc::now().timestamp_millis()),
+                }},
                 opts,
             )
             .await
-            .context("claim_for_quality failed")?;
+            .context("claim_quality_job failed")?;
 
-        Ok(result)
+        let job = match job { Some(j) => j, None => return Ok(None) };
+
+        let metar = self.metar_entries()
+            .find_one(doc! { "audio_recording_id": job.audio_recording_id }, None)
+            .await?
+            .context("MetarEntry not found for quality job")?;
+
+        let tx = self.transcriptions()
+            .find_one(doc! { "audio_recording_id": job.audio_recording_id }, None)
+            .await?
+            .context("Transcription not found for quality job")?;
+
+        Ok(Some((job, metar, tx)))
     }
 
-    pub async fn mark_quality_result(
+    pub async fn complete_quality_job(
         &self,
-        id: ObjectId,
-        quality: &crate::models::QualityDoc,
-        status: QualityStatus,
+        job_id:   ObjectId,
+        metar_id: ObjectId,
+        quality:  &QualityResult,
+        status:   QualityStatus,
     ) -> Result<()> {
         let quality_bson = bson::to_bson(quality)?;
         let status_bson  = bson::to_bson(&status)?;
-        self.audio_records()
-            .update_one(
-                doc! { "_id": id },
-                doc! {
-                    "$set": {
-                        "quality_status": status_bson,
-                        "quality":        quality_bson,
-                        "updated_at":     BsonDateTime::from_millis(Utc::now().timestamp_millis()),
-                    }
-                },
-                None,
-            )
-            .await?;
+        let now = BsonDateTime::from_millis(Utc::now().timestamp_millis());
+
+        self.metar_entries().update_one(
+            doc! { "_id": metar_id },
+            doc! { "$set": {
+                "quality_status": status_bson,
+                "quality":        quality_bson,
+                "updated_at":     now.clone(),
+            }},
+            None,
+        ).await?;
+
+        self.processing_jobs().update_one(
+            doc! { "_id": job_id },
+            doc! { "$set": { "status": "done", "updated_at": now }},
+            None,
+        ).await?;
+
         Ok(())
-    }
-
-    // -----------------------------------------------------------------------
-    // Weather observations
-    // -----------------------------------------------------------------------
-
-    /// Upsert a WeatherObservation keyed on audio_record_id.
-    pub async fn upsert_weather_observation(&self, obs: &WeatherObservation) -> Result<ObjectId> {
-        use mongodb::options::FindOneAndUpdateOptions;
-
-        let obs_bson = bson::to_document(obs)?;
-        let opts = FindOneAndUpdateOptions::builder()
-            .upsert(true)
-            .return_document(ReturnDocument::After)
-            .build();
-
-        let result = self
-            .weather_observations()
-            .find_one_and_update(
-                doc! { "audio_record_id": obs.audio_record_id },
-                doc! { "$set": obs_bson },
-                opts,
-            )
-            .await?
-            .context("upsert_weather_observation returned None")?;
-
-        Ok(result.id.unwrap_or_else(ObjectId::new))
     }
 }

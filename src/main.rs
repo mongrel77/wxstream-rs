@@ -7,16 +7,13 @@ mod models;
 mod parse;
 mod quality;
 mod s3;
-mod stations;
 mod transcribe;
 mod trim;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // Load .env file if present (dev convenience)
     let _ = dotenvy::dotenv();
 
-    // Initialize structured logging
     let filter = std::env::var("RUST_LOG")
         .unwrap_or_else(|_| "wxstream=info,warn".to_string());
 
@@ -27,7 +24,6 @@ async fn main() -> anyhow::Result<()> {
 
     tracing::info!("WxStream starting up");
 
-    // Load configuration
     let cfg = config::load().map_err(|e| {
         tracing::error!("Configuration error: {}", e);
         e
@@ -40,39 +36,46 @@ async fn main() -> anyhow::Result<()> {
         cfg.openai.model,
     );
 
-    // Load station registry
-    let stations = stations::load(&cfg.stations.json_path)?;
-    let stations = Arc::new(stations);
-
-    // Connect to MongoDB
     let db = db::Db::connect(&cfg.mongodb).await?;
     db.ensure_indexes().await?;
     let db = Arc::new(db);
+
+    // Load sites from MongoDB sites collection
+    let sites = db.load_sites().await?;
+    let sites = Arc::new(sites);
 
     let cfg = Arc::new(cfg);
 
     tracing::info!("All systems connected — launching pipeline jobs");
 
-    // Spawn all four job workers as independent concurrent tasks.
-    // Each runs forever in its own loop, polling MongoDB for work.
+    // Scanner: finds new raw recordings and creates transcribe jobs
+    let scanner_handle = tokio::spawn(jobs::scanner_job::run(
+        cfg.clone(),
+        db.clone(),
+    ));
+
+    // Transcribe: picks up transcribe jobs, calls Whisper
     let transcribe_handle = tokio::spawn(jobs::transcribe_job::run(
         cfg.clone(),
         db.clone(),
-        stations.clone(),
+        sites.clone(),
     ));
 
+    // Parse: picks up parse jobs, extracts weather data
     let parse_handle = tokio::spawn(jobs::parse_job::run(
         cfg.clone(),
         db.clone(),
-        stations.clone(),
+        sites.clone(),
     ));
 
+    // Trim: picks up trim jobs, cuts audio and uploads to S3
     let trim_handle = tokio::spawn(jobs::trim_job::run(
         cfg.clone(),
         db.clone(),
-        stations.clone(),
+        sites.clone(),
     ));
 
+    // Quality: picks up quality jobs, runs Claude agent
     let quality_handle = tokio::spawn(jobs::quality_job::run(
         cfg.clone(),
         db.clone(),
@@ -80,10 +83,12 @@ async fn main() -> anyhow::Result<()> {
 
     tracing::info!("Pipeline running | Ctrl+C to stop");
 
-    // Wait for shutdown signal
     tokio::select! {
         _ = tokio::signal::ctrl_c() => {
             tracing::info!("Shutdown signal received");
+        }
+        result = scanner_handle => {
+            tracing::error!("ScannerJob exited unexpectedly: {:?}", result);
         }
         result = transcribe_handle => {
             tracing::error!("TranscribeJob exited unexpectedly: {:?}", result);
