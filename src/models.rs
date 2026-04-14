@@ -104,13 +104,13 @@ pub struct ProcessingJob {
     pub status:             JobStatus,
     pub error:              Option<String>,
 
-    pub created_at:         DateTime<Utc>,
-    pub updated_at:         DateTime<Utc>,
+    pub created_at:         bson::DateTime,
+    pub updated_at:         bson::DateTime,
 }
 
 impl ProcessingJob {
     pub fn new(audio_recording_id: ObjectId, site_id: String, stage: JobStage) -> Self {
-        let now = Utc::now();
+        let now = bson::DateTime::now();
         Self {
             id: None,
             audio_recording_id,
