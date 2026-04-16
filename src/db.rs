@@ -150,6 +150,30 @@ impl Db {
     // Scanner — finds unqueued raw recordings and creates transcribe jobs
     // -----------------------------------------------------------------------
 
+    /// Reset jobs that have been stuck in "pending" longer than timeout_secs.
+    /// Returns the number of jobs reset.
+    pub async fn recover_stuck_jobs(&self, timeout_secs: u64) -> Result<u64> {
+        let cutoff = bson::DateTime::from_millis(
+            Utc::now().timestamp_millis() - (timeout_secs as i64 * 1000)
+        );
+
+        let result = self.processing_jobs()
+            .update_many(
+                doc! {
+                    "status":     "pending",
+                    "updated_at": { "$lt": cutoff },
+                },
+                doc! { "$set": {
+                    "status":     "not_started",
+                    "updated_at": BsonDateTime::from_millis(Utc::now().timestamp_millis()),
+                }},
+                None,
+            )
+            .await?;
+
+        Ok(result.modified_count)
+    }
+
     /// Find raw audio_recordings that don't yet have a transcribe job.
     pub async fn find_unqueued_raw_recordings(&self) -> Result<Vec<AudioRecording>> {
         // Get all audio_recording_ids that already have a transcribe job

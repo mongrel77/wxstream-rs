@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use clap::{Parser, ValueEnum};
 
 mod config;
 mod db;
@@ -10,9 +11,38 @@ mod s3;
 mod transcribe;
 mod trim;
 
+#[derive(Debug, Clone, ValueEnum)]
+enum Service {
+    /// Scans for new raw recordings and creates transcribe jobs
+    Scanner,
+    /// Transcribes audio using Whisper API
+    Transcribe,
+    /// Parses transcriptions into weather data
+    Parse,
+    /// Trims audio to single broadcast loop
+    Trim,
+    /// Runs quality agent on parsed data
+    Quality,
+    /// Runs all services in a single process (default, dev mode)
+    All,
+}
+
+#[derive(Parser, Debug)]
+#[command(name = "wxstream", about = "WxStream audio processing pipeline")]
+struct Args {
+    /// Which service to run
+    #[arg(short, long, default_value = "all")]
+    service: Service,
+
+    /// Number of concurrent workers (overrides config)
+    #[arg(short, long)]
+    workers: Option<usize>,
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let _ = dotenvy::dotenv();
+    let args = Args::parse();
 
     let filter = std::env::var("RUST_LOG")
         .unwrap_or_else(|_| "wxstream=info,warn".to_string());
@@ -22,85 +52,113 @@ async fn main() -> anyhow::Result<()> {
         .with_target(false)
         .init();
 
-    tracing::info!("WxStream starting up");
+    let service_name = format!("{:?}", args.service).to_lowercase();
+    tracing::info!("WxStream starting | service={} workers={:?}",
+        service_name, args.workers);
 
-    let cfg = config::load().map_err(|e| {
+    let mut cfg = config::load().map_err(|e| {
         tracing::error!("Configuration error: {}", e);
         e
     })?;
 
-    tracing::info!(
-        "Config loaded | DB: {} | S3: s3://{} | Model: {}",
-        cfg.mongodb.database,
-        cfg.s3.bucket,
-        cfg.openai.model,
-    );
+    // Override worker counts from CLI if provided
+    if let Some(w) = args.workers {
+        match args.service {
+            Service::Transcribe => cfg.jobs.transcribe_concurrency = w,
+            Service::Parse      => cfg.jobs.parse_concurrency      = w,
+            Service::Trim       => cfg.jobs.trim_concurrency       = w,
+            Service::Quality    => cfg.jobs.quality_concurrency    = w,
+            _ => {}
+        }
+    }
+
+    tracing::info!("Config loaded | DB: {} | S3: s3://{}",
+        cfg.mongodb.database, cfg.s3.bucket);
 
     let db = db::Db::connect(&cfg.mongodb).await?;
     db.ensure_indexes().await?;
     let db = Arc::new(db);
 
-    // Load sites from MongoDB sites collection
-    let sites = db.load_sites().await?;
-    let sites = Arc::new(sites);
+    // Load sites from MongoDB — needed by transcribe, parse, trim
+    let sites = match args.service {
+        Service::Scanner | Service::Quality => Arc::new(std::collections::HashMap::new()),
+        _ => {
+            let s = db.load_sites().await?;
+            Arc::new(s)
+        }
+    };
 
     let cfg = Arc::new(cfg);
 
-    tracing::info!("All systems connected — launching pipeline jobs");
+    tracing::info!("Connected | launching {}", service_name);
 
-    // Scanner: finds new raw recordings and creates transcribe jobs
-    let scanner_handle = tokio::spawn(jobs::scanner_job::run(
-        cfg.clone(),
-        db.clone(),
-    ));
-
-    // Transcribe: picks up transcribe jobs, calls Whisper
-    let transcribe_handle = tokio::spawn(jobs::transcribe_job::run(
-        cfg.clone(),
-        db.clone(),
-        sites.clone(),
-    ));
-
-    // Parse: picks up parse jobs, extracts weather data
-    let parse_handle = tokio::spawn(jobs::parse_job::run(
-        cfg.clone(),
-        db.clone(),
-        sites.clone(),
-    ));
-
-    // Trim: picks up trim jobs, cuts audio and uploads to S3
-    let trim_handle = tokio::spawn(jobs::trim_job::run(
-        cfg.clone(),
-        db.clone(),
-        sites.clone(),
-    ));
-
-    // Quality: picks up quality jobs, runs Claude agent
-    let quality_handle = tokio::spawn(jobs::quality_job::run(
-        cfg.clone(),
-        db.clone(),
-    ));
-
-    tracing::info!("Pipeline running | Ctrl+C to stop");
-
-    tokio::select! {
-        _ = tokio::signal::ctrl_c() => {
-            tracing::info!("Shutdown signal received");
+    match args.service {
+        Service::Scanner => {
+            tracing::info!("ScannerService started");
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {}
+                _ = jobs::scanner_job::run(cfg.clone(), db.clone()) => {}
+            }
         }
-        result = scanner_handle => {
-            tracing::error!("ScannerJob exited unexpectedly: {:?}", result);
+
+        Service::Transcribe => {
+            tracing::info!("TranscribeService started (workers={})",
+                cfg.jobs.transcribe_concurrency);
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {}
+                _ = jobs::transcribe_job::run(cfg.clone(), db.clone(), sites.clone()) => {}
+            }
         }
-        result = transcribe_handle => {
-            tracing::error!("TranscribeJob exited unexpectedly: {:?}", result);
+
+        Service::Parse => {
+            tracing::info!("ParseService started (workers={})",
+                cfg.jobs.parse_concurrency);
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {}
+                _ = jobs::parse_job::run(cfg.clone(), db.clone(), sites.clone()) => {}
+            }
         }
-        result = parse_handle => {
-            tracing::error!("ParseJob exited unexpectedly: {:?}", result);
+
+        Service::Trim => {
+            tracing::info!("TrimService started (workers={})",
+                cfg.jobs.trim_concurrency);
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {}
+                _ = jobs::trim_job::run(cfg.clone(), db.clone(), sites.clone()) => {}
+            }
         }
-        result = trim_handle => {
-            tracing::error!("TrimJob exited unexpectedly: {:?}", result);
+
+        Service::Quality => {
+            tracing::info!("QualityService started (workers={})",
+                cfg.jobs.quality_concurrency);
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {}
+                _ = jobs::quality_job::run(cfg.clone(), db.clone()) => {}
+            }
         }
-        result = quality_handle => {
-            tracing::error!("QualityJob exited unexpectedly: {:?}", result);
+
+        Service::All => {
+            tracing::info!("All services started (dev mode)");
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {
+                    tracing::info!("Shutdown signal received");
+                }
+                _ = jobs::scanner_job::run(cfg.clone(), db.clone()) => {
+                    tracing::error!("ScannerJob exited unexpectedly");
+                }
+                _ = jobs::transcribe_job::run(cfg.clone(), db.clone(), sites.clone()) => {
+                    tracing::error!("TranscribeJob exited unexpectedly");
+                }
+                _ = jobs::parse_job::run(cfg.clone(), db.clone(), sites.clone()) => {
+                    tracing::error!("ParseJob exited unexpectedly");
+                }
+                _ = jobs::trim_job::run(cfg.clone(), db.clone(), sites.clone()) => {
+                    tracing::error!("TrimJob exited unexpectedly");
+                }
+                _ = jobs::quality_job::run(cfg.clone(), db.clone()) => {
+                    tracing::error!("QualityJob exited unexpectedly");
+                }
+            }
         }
     }
 
