@@ -1,7 +1,7 @@
 pub mod timestamp;
 
 use anyhow::{Context, Result};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tokio::process::Command;
 
 use crate::config::TrimConfig;
@@ -12,6 +12,7 @@ use crate::models::WordTimestamp;
 // ---------------------------------------------------------------------------
 
 pub struct TrimResult {
+    pub output_path: PathBuf,
     pub duration_s:  f64,
     pub method:      TrimMethod,
 }
@@ -94,6 +95,7 @@ async fn trim_by_timestamps(
     let actual_dur = get_duration(output_path).await.unwrap_or(duration);
 
     Ok(TrimResult {
+        output_path: output_path.to_path_buf(),
         duration_s:  actual_dur,
         method:      TrimMethod::Timestamp,
     })
@@ -193,6 +195,7 @@ async fn trim_by_energy(
     let actual_dur = get_duration(output_path).await.unwrap_or(duration);
 
     Ok(TrimResult {
+        output_path: output_path.to_path_buf(),
         duration_s:  actual_dur,
         method:      TrimMethod::Energy,
     })

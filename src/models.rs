@@ -1,27 +1,25 @@
-#![allow(dead_code)]
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use bson::oid::ObjectId;
 
 // ---------------------------------------------------------------------------
-// Processing job stages and statuses
+// Status enums
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum JobStage {
-    Transcribe,
-    Parse,
-    Trim,
-    Quality,
+pub enum RawStatus {
+    NotProcessed,
+    Processing,
+    Transcribed,
+    Failed,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum JobStatus {
-    NotStarted,
+pub enum TrimStatus {
     Pending,
-    Done,
+    Processing,
+    Completed,
     Failed,
 }
 
@@ -36,102 +34,7 @@ pub enum QualityStatus {
 }
 
 // ---------------------------------------------------------------------------
-// Site (from sites collection, _id is station string e.g. "KAIZ")
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Site {
-    #[serde(rename = "_id")]
-    pub id:                       String,
-    pub loc_name:                 String,
-    pub county:                   Option<String>,
-    pub state:                    Option<String>,
-    pub frequency:                Option<f64>,
-    pub phone:                    Option<String>,
-    #[serde(rename = "type")]
-    pub site_type:                String,
-    pub silence_threshold_ms:     Option<u32>,
-    pub rms_silence_threshold_db: Option<f64>,
-    pub created_at:               Option<bson::Bson>,
-    pub updated_at:               Option<bson::Bson>,
-}
-
-// ---------------------------------------------------------------------------
-// S3 audio location subdocument
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct AudioLocation {
-    pub bucket:     String,
-    pub object_key: String,
-}
-
-// ---------------------------------------------------------------------------
-// AudioRecording — audio_recordings collection
-// Remote sites insert with type "raw". We append type "trimmed" after trim.
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AudioRecording {
-    #[serde(rename = "_id", skip_serializing_if = "Option::is_none")]
-    pub id:            Option<ObjectId>,
-
-    pub site_id:       String,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub recorded:      Option<bson::Bson>,
-
-    #[serde(rename = "type")]
-    pub rec_type:      String,
-
-    pub bucket:        String,
-    pub object_key:    String,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub created_at:    Option<bson::Bson>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub updated_at:    Option<bson::Bson>,
-}
-
-// ---------------------------------------------------------------------------
-// ProcessingJob — processing_jobs collection
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProcessingJob {
-    #[serde(rename = "_id", skip_serializing_if = "Option::is_none")]
-    pub id:                 Option<ObjectId>,
-
-    pub audio_recording_id: ObjectId,
-    pub site_id:            String,
-    pub stage:              JobStage,
-    pub status:             JobStatus,
-    pub error:              Option<String>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub created_at:         Option<bson::Bson>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub updated_at:         Option<bson::Bson>,
-}
-
-impl ProcessingJob {
-    pub fn new(audio_recording_id: ObjectId, site_id: String, stage: JobStage) -> Self {
-        let now = bson::Bson::DateTime(bson::DateTime::now());
-        Self {
-            id: None,
-            audio_recording_id,
-            site_id,
-            stage,
-            status: JobStatus::NotStarted,
-            error:  None,
-            created_at: Some(now.clone()),
-            updated_at: Some(now),
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Word and segment timestamps
+// Word timestamp (matches Whisper verbose_json output)
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -149,99 +52,214 @@ pub struct SegmentTimestamp {
 }
 
 // ---------------------------------------------------------------------------
-// Transcription — transcriptions collection
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Transcription {
-    #[serde(rename = "_id", skip_serializing_if = "Option::is_none")]
-    pub id:                    Option<ObjectId>,
-
-    pub audio_recording_id:    ObjectId,
-    pub site_id:               String,
-
-    pub raw_transcript:        String,
-    pub word_timestamps:       Vec<WordTimestamp>,
-    pub segment_timestamps:    Vec<SegmentTimestamp>,
-    pub timestamp_source:      String,
-
-    pub cleaned_transcript:    Option<String>,
-    pub hallucination_chars:   Option<i32>,
-
-    pub created_at:            DateTime<Utc>,
-}
-
-// ---------------------------------------------------------------------------
-// Wind subdocument
+// Transcription subdocument
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct WindEntry {
+pub struct TranscriptionDoc {
+    pub raw_transcript:       Option<String>,
+    pub cleaned_transcript:   Option<String>,
+    pub hallucination_chars:  Option<i32>,
+    pub word_timestamps:      Vec<WordTimestamp>,
+    pub segment_timestamps:   Vec<SegmentTimestamp>,
+    /// "word" | "segment" | "none"
+    pub timestamp_source:     Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// Parsed weather subdocument (mirrors parse_transcripts.py output)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct WindDoc {
     pub direction:  Option<String>,
     pub speed_kt:   Option<String>,
     pub gust_kt:    Option<String>,
     pub variable:   Option<bool>,
     pub calm:       Option<bool>,
     pub raw:        Option<String>,
-    pub metar:      Option<String>,
 }
 
-// ---------------------------------------------------------------------------
-// Sky condition subdocument
-// ---------------------------------------------------------------------------
-
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct SkyCondition {
-    pub coverage:  String,
+pub struct SkyConditionDoc {
+    pub coverage:  String,   // FEW | SCT | BKN | OVC | CLR | SKC
     pub height_ft: Option<u32>,
+    pub raw:       Option<String>,
 }
 
-// ---------------------------------------------------------------------------
-// MetarEntry — metar_entries collection
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MetarEntry {
-    #[serde(rename = "_id", skip_serializing_if = "Option::is_none")]
-    pub id:                  Option<ObjectId>,
-
-    pub audio_recording_id:  ObjectId,
-    pub transcription_id:    ObjectId,
-    pub site_id:             String,
-    pub observed_at:         DateTime<Utc>,
-
-    pub time:                Option<String>,
-    pub wind:                Option<WindEntry>,
-    pub visibility_sm:       Option<String>,
-    pub sky:                 Vec<SkyCondition>,
-    pub temperature_c:       Option<String>,
-    pub dewpoint_c:          Option<String>,
-    pub altimeter_inhg:      Option<String>,
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ParsedDoc {
+    pub selected_loop_time: Option<String>,
+    pub time:               Option<String>,
+    pub wind:               Option<WindDoc>,
+    pub visibility_sm:      Option<String>,
+    pub sky:                Vec<SkyConditionDoc>,
+    pub temperature_c:      Option<String>,
+    pub dewpoint_c:         Option<String>,
+    pub altimeter_inhg:     Option<String>,
     pub density_altitude_ft: Option<String>,
-    pub phenomena:           Vec<String>,
-    pub remarks:             Option<String>,
-    pub metar:               Option<String>,
-    pub selected_loop_time:  Option<String>,
-
-    pub quality_status:      QualityStatus,
-    pub quality:             Option<QualityResult>,
-
-    pub created_at:          DateTime<Utc>,
-    pub updated_at:          DateTime<Utc>,
+    pub remarks:            Option<String>,
+    pub phenomena:          Vec<String>,
+    pub metar:              Option<String>,
 }
 
 // ---------------------------------------------------------------------------
-// Quality result subdocument
+// Quality review subdocument
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct QualityResult {
+pub struct QualityDoc {
     pub reviewed_at:    Option<DateTime<Utc>>,
     pub model:          Option<String>,
     pub confidence:     Option<f64>,
+    /// Fields flagged as uncertain by the quality agent
     pub flagged_fields: Vec<String>,
+    /// Agent's notes / reasoning
     pub notes:          Option<String>,
+    /// Suggested corrections (field -> corrected value)
     pub corrections:    Option<serde_json::Value>,
+    /// Whether a human has reviewed this record
     pub human_reviewed: bool,
     pub human_notes:    Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// AudioRecord — primary pipeline tracking document
+// Collection: wxstream.audio_records
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AudioRecord {
+    #[serde(rename = "_id", skip_serializing_if = "Option::is_none")]
+    pub id: Option<bson::oid::ObjectId>,
+
+    pub station_id:    String,
+    pub recorded_at:   DateTime<Utc>,
+
+    // S3 locations
+    pub raw_s3_key:     String,
+    pub trimmed_s3_key: Option<String>,
+
+    // Pipeline status flags
+    pub raw_status:     RawStatus,
+    pub trim_status:    TrimStatus,
+    pub quality_status: QualityStatus,
+
+    // Subdocuments populated by each job
+    pub transcription:  TranscriptionDoc,
+    pub parsed:         Option<ParsedDoc>,
+    pub quality:        Option<QualityDoc>,
+
+    // Audit
+    pub created_at:     DateTime<Utc>,
+    pub updated_at:     DateTime<Utc>,
+    pub error:          Option<String>,
+}
+
+impl AudioRecord {
+    pub fn new(station_id: String, raw_s3_key: String, recorded_at: DateTime<Utc>) -> Self {
+        let now = Utc::now();
+        Self {
+            id:             None,
+            station_id,
+            recorded_at,
+            raw_s3_key,
+            trimmed_s3_key: None,
+            raw_status:     RawStatus::NotProcessed,
+            trim_status:    TrimStatus::Pending,
+            quality_status: QualityStatus::Pending,
+            transcription:  TranscriptionDoc::default(),
+            parsed:         None,
+            quality:        None,
+            created_at:     now,
+            updated_at:     now,
+            error:          None,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// WeatherObservation — clean final output document
+// Collection: wxstream.weather_observations
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WeatherObservation {
+    #[serde(rename = "_id", skip_serializing_if = "Option::is_none")]
+    pub id: Option<bson::oid::ObjectId>,
+
+    /// Reference back to the AudioRecord that produced this observation
+    pub audio_record_id: bson::oid::ObjectId,
+
+    pub station_id:   String,
+    pub observed_at:  DateTime<Utc>,
+
+    // Parsed weather fields
+    pub wind:             Option<WindDoc>,
+    pub visibility_sm:    Option<String>,
+    pub sky:              Vec<SkyConditionDoc>,
+    pub temperature_c:    Option<String>,
+    pub dewpoint_c:       Option<String>,
+    pub altimeter_inhg:   Option<String>,
+    pub density_altitude_ft: Option<String>,
+    pub phenomena:        Vec<String>,
+    pub remarks:          Option<String>,
+    pub metar:            Option<String>,
+
+    // S3 location of trimmed audio
+    pub trimmed_s3_key:   Option<String>,
+
+    // Quality
+    pub quality_status:   QualityStatus,
+    pub quality_notes:    Option<String>,
+
+    pub created_at:  DateTime<Utc>,
+    pub updated_at:  DateTime<Utc>,
+}
+
+impl WeatherObservation {
+    pub fn from_audio_record(
+        record: &AudioRecord,
+        record_id: bson::oid::ObjectId,
+    ) -> Self {
+        let now = Utc::now();
+        let parsed = record.parsed.clone().unwrap_or_default();
+        Self {
+            id:               None,
+            audio_record_id:  record_id,
+            station_id:       record.station_id.clone(),
+            observed_at:      record.recorded_at,
+            wind:             parsed.wind,
+            visibility_sm:    parsed.visibility_sm,
+            sky:              parsed.sky,
+            temperature_c:    parsed.temperature_c,
+            dewpoint_c:       parsed.dewpoint_c,
+            altimeter_inhg:   parsed.altimeter_inhg,
+            density_altitude_ft: parsed.density_altitude_ft,
+            phenomena:        parsed.phenomena,
+            remarks:          parsed.remarks,
+            metar:            parsed.metar,
+            trimmed_s3_key:   record.trimmed_s3_key.clone(),
+            quality_status:   record.quality_status.clone(),
+            quality_notes:    None,
+            created_at:       now,
+            updated_at:       now,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Station metadata (loaded from JSON file)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Station {
+    pub id:       String,
+    pub location: String,
+    #[serde(rename = "type")]
+    pub stn_type: String,
+    pub phone:    Option<String>,
+    pub lat:      Option<f64>,
+    pub lon:      Option<f64>,
+    pub elev_ft:  Option<f64>,
 }

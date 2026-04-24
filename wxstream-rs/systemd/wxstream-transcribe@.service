@@ -1,0 +1,21 @@
+[Unit]
+Description=WxStream Transcribe Service (%i workers)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/wxstream-rs
+EnvironmentFile=/root/wxstream-rs/.env
+ExecStart=/root/wxstream-rs/target/release/wxstream --service transcribe --workers %i
+Restart=on-failure
+RestartSec=5s
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=wxstream-transcribe
+
+[Install]
+WantedBy=multi-user.target

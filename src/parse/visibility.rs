@@ -8,6 +8,14 @@ pub fn extract_visibility(text: &str) -> String {
     let text = text.replace(',', " ");
 
     // Fractional visibility conversions
+    static FRAC_PATTERNS: &[(&str, &str)] = &[
+        (r"(?i)\b(\d+)\s+and\s+(?:one\s+half|1\s+half|half)\b",          "HALF"),
+        (r"(?i)\b(\d+)\s+and\s+(?:three\s+quarters?|3\s+quarters?)\b",   "THREE_Q"),
+        (r"(?i)\b(\d+)\s+and\s+(?:one\s+quarter|1\s+quarter|quarter)\b", "ONE_Q"),
+        (r"(?i)\b(?:three|3)\s+quarters?\b",                              "0.75"),
+        (r"(?i)\b(?:one|1)\s+half\b",                                     "0.5"),
+        (r"(?i)\b(?:one|1)\s+quarter\b",                                  "0.25"),
+    ];
 
     let mut t = text.clone();
 

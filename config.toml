@@ -1,46 +1,55 @@
 # wxstream runtime configuration
 # All values can be overridden with environment variables.
 # Convention: nested keys become WXSTREAM__SECTION__KEY
+# e.g. [mongodb] uri = "..." -> WXSTREAM__MONGODB__URI
 
 [mongodb]
-uri      = "mongodb+srv://remote:PASSWORD@prod.vew9qwt.mongodb.net/?appName=prod"
-database = "wxobs-pline"
+uri          = "mongodb+srv://remote:PASSWORD@prod.vew9qwt.mongodb.net/?appName=prod"
+database     = "wxstream"
+audio_records_collection     = "audio_records"
+weather_observations_collection = "weather_observations"
 
 [s3]
 region      = "us-east-2"
 bucket      = "wxstream-recordings-541371124303-us-east-2-an"
-raw_prefix  = "recordings"
-trim_prefix = "recordings"
+raw_prefix  = "recordings"       # recordings/KAIZ/raw/
+trim_prefix = "recordings"       # recordings/KAIZ/trimmed/
 
 [openai]
-api_key     = ""
+api_key     = ""                 # set via WXSTREAM__OPENAI__API_KEY or OPENAI_API_KEY
 model       = "whisper-1"
 temperature = 0.0
 
 [anthropic]
-api_key    = ""
-model      = "claude-haiku-4-5-20251001"
-max_tokens = 1024
+api_key     = ""                 # set via WXSTREAM__ANTHROPIC__API_KEY or ANTHROPIC_API_KEY
+model       = "claude-haiku-4-5-20251001"
+max_tokens  = 1024
 
 [jobs]
+# How often each job polls MongoDB for new work (seconds)
 transcribe_poll_interval_s  = 5
 parse_poll_interval_s       = 5
 trim_poll_interval_s        = 5
 quality_poll_interval_s     = 10
 
+# How many records each job processes concurrently
 transcribe_concurrency      = 10
 parse_concurrency           = 10
 trim_concurrency            = 4
 quality_concurrency         = 4
 
+# Minimum audio duration to process (seconds)
 min_audio_duration_s        = 10
 
 [trim]
-preroll_s    = 0.15
-trailing_db  = -42.0
-min_loop_s   = 15
-max_loop_s   = 120
+preroll_s       = 0.15
+trailing_db     = -42.0
+min_loop_s      = 15
+max_loop_s      = 120
 
 [silence_strip]
-threshold_db  = -40.0
-min_silence_s = 1.5
+threshold_db    = -40.0
+min_silence_s   = 1.5
+
+[stations]
+json_path = "/etc/wxstream/missouri_awos_asos_stations.json"

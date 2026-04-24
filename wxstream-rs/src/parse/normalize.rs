@@ -166,9 +166,14 @@ pub fn truncate_digit_storm(text: &str, min_run: usize) -> String {
 /// Strip preamble — find the last complete broadcast loop.
 /// Returns (segment_text, obs_time_4digit).
 /// Mirrors strip_preamble() from parse_transcripts.py.
+///
+/// Pattern broadened to handle:
+///   - Title-case "Automated Weather Observation" (KJEF-style ASOS)
+///   - Period-only separator "Observation.1453 zulu" (no space before time)
+///   - Optional whitespace between keywords
 pub fn strip_preamble(text: &str) -> (String, Option<String>) {
     static PATTERN: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"(?i)[Aa]utomated weather observation[.\s,]+(\d{4})[.\s,]*[Zz]ulu(?:[Ww]eather)?").unwrap()
+        Regex::new(r"(?i)automated\s+weather\s+observation[.\s,]+(\d{4})[.\s,]*zulu(?:\s*weather)?").unwrap()
     });
 
     let matches: Vec<_> = PATTERN.find_iter(text).collect();

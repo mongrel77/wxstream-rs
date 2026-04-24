@@ -62,6 +62,90 @@ pub struct ParsedWeather {
 }
 
 // ---------------------------------------------------------------------------
+// Majority-vote helpers
+// ---------------------------------------------------------------------------
+
+/// Split norm_full into per-loop segments and return them.
+/// Returns an empty Vec if fewer than 2 loops are found.
+fn loop_segments(norm_full: &str) -> Vec<String> {
+    static LOOP_PAT: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(r"(?i)automated\s+weather\s+observation[.\s,]+\d{4}[.\s,]*zulu(?:\s*weather)?").unwrap()
+    });
+    let matches: Vec<_> = LOOP_PAT.find_iter(norm_full).collect();
+    if matches.len() < 2 {
+        return vec![];
+    }
+    let mut segs = Vec::new();
+    for (i, m) in matches.iter().enumerate() {
+        let end = if i + 1 < matches.len() { matches[i + 1].start() } else { norm_full.len() };
+        segs.push(norm_full[m.start()..end].to_string());
+    }
+    segs
+}
+
+/// Majority vote for sky across loops.
+/// Returns the most common (metar, display) pair when it is a strict majority
+/// (> half of valid votes).  Falls back to current_metar/display unchanged.
+fn majority_vote_sky(
+    norm_full: &str,
+    current_metar: &str,
+    current_display: &str,
+) -> (String, String) {
+    let segs = loop_segments(norm_full);
+    if segs.is_empty() {
+        return (current_metar.to_string(), current_display.to_string());
+    }
+    let mut counts: std::collections::HashMap<(String, String), usize> = std::collections::HashMap::new();
+    let invalid = ["N/A", "M", "Missing", ""];
+    for seg in &segs {
+        let r = extract_sky(seg);
+        if !invalid.contains(&r.metar.as_str()) {
+            *counts.entry((r.metar, r.display)).or_insert(0) += 1;
+        }
+    }
+    if counts.is_empty() {
+        return (current_metar.to_string(), current_display.to_string());
+    }
+    let total: usize = counts.values().sum();
+    let ((best_metar, best_disp), best_count) = counts.into_iter().max_by_key(|(_, c)| *c).unwrap();
+    if best_count * 2 > total && (best_metar != current_metar || best_disp != current_display) {
+        (best_metar, best_disp)
+    } else {
+        (current_metar.to_string(), current_display.to_string())
+    }
+}
+
+/// Majority vote for temp/dp across loops.
+/// Only overrides when one value appears in a strict majority of loops.
+fn majority_vote_temp(
+    norm_full: &str,
+    current_display: &str,
+    current_metar: &str,
+) -> (String, String) {
+    let segs = loop_segments(norm_full);
+    if segs.is_empty() {
+        return (current_display.to_string(), current_metar.to_string());
+    }
+    let mut counts: std::collections::HashMap<(String, String), usize> = std::collections::HashMap::new();
+    for seg in &segs {
+        let r = extract_temp_dp(seg);
+        if r.display != "N/A" && r.display != "Missing" && !is_temp_implausible(&r.display) {
+            *counts.entry((r.display, r.metar)).or_insert(0) += 1;
+        }
+    }
+    if counts.is_empty() {
+        return (current_display.to_string(), current_metar.to_string());
+    }
+    let total: usize = counts.values().sum();
+    let ((best_disp, best_metar), best_count) = counts.into_iter().max_by_key(|(_, c)| *c).unwrap();
+    if best_count * 2 > total && (best_disp != current_display || best_metar != current_metar) {
+        (best_disp, best_metar)
+    } else {
+        (current_display.to_string(), current_metar.to_string())
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Main parse function
 // ---------------------------------------------------------------------------
 
@@ -99,12 +183,29 @@ pub fn parse(input: &ParseInput) -> ParsedWeather {
             || (full_sky.display.contains('(') && !sky_result.display.contains('('));
         if upgrade { sky_result = full_sky; }
     }
+    // Majority vote: correct outlier last loops (e.g. KFWB temp 17->18 pattern
+    // applied to sky — rare but guards against coverage flips in the final loop).
+    // Strict majority required (> half votes) so genuine 2-loop updates are preserved.
+    if sky_result.metar != "N/A" && sky_result.metar != "M" && sky_result.metar != "Missing" {
+        let (voted_metar, voted_disp) =
+            majority_vote_sky(&norm_full, &sky_result.metar, &sky_result.display);
+        sky_result.metar   = voted_metar;
+        sky_result.display = voted_disp;
+    }
 
     // Temperature / Dewpoint
     let mut temp_result = extract_temp_dp(&norm);
     if is_temp_implausible(&temp_result.display) {
         let full_temp = extract_temp_dp(&norm_full);
         if !is_temp_implausible(&full_temp.display) { temp_result = full_temp; }
+    }
+    // Majority vote: correct outlier last loops (e.g. KFWB: 2 loops 17°C, last loop 18°C).
+    // Strict majority required so genuine station updates between loops are preserved.
+    if temp_result.display != "N/A" && temp_result.display != "Missing" {
+        let (voted_disp, voted_metar) =
+            majority_vote_temp(&norm_full, &temp_result.display, &temp_result.metar);
+        temp_result.display = voted_disp;
+        temp_result.metar   = voted_metar;
     }
 
     // Altimeter

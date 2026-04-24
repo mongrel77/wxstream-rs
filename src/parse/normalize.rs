@@ -13,9 +13,8 @@ pub fn normalize(text: &str) -> String {
     t = VIS_PRESPLIT.replace_all(&t, "$1$2. $3$4").to_string();
 
     // Collapse hyphen-separated single digits: 1-4-5-2 -> 1452
-    // Use \b instead of lookbehind/lookahead (not supported in Rust regex)
     static HYPHEN_DIGITS: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"\b(\d)(?:-(\d))+\b").unwrap()
+        Regex::new(r"(?<!\w)(\d)(?:-(\d))+(?!\w)").unwrap()
     });
     t = HYPHEN_DIGITS.replace_all(&t, |caps: &regex::Captures| {
         caps[0].replace('-', "")
@@ -133,14 +132,16 @@ pub fn normalize(text: &str) -> String {
     static THOU_SEP_DASH: Lazy<Regex> = Lazy::new(|| Regex::new(r"\b(\d{1,2})-000\b").unwrap());
     t = THOU_SEP_DASH.replace_all(&t, "${1}000").to_string();
 
-    // Spoken decimal point: '128 point 45' -> '128.45'
+    // Spoken decimal point
+    static DECIMAL: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)(?<=\d)\s+point\s+(?=\d)").unwrap());
+    // Use a simpler approach since lookbehind isn't supported in Rust regex
     static DECIMAL2: Lazy<Regex> = Lazy::new(|| Regex::new(r"(\d)\s+[Pp]oint\s+(\d)").unwrap());
     t = DECIMAL2.replace_all(&t, "$1.$2").to_string();
 
-    // Zero-pad 3-digit times before 'local time': '700 local time' -> '0700 local time'
-    static LOCAL_TIME: Lazy<Regex> = Lazy::new(|| Regex::new(r"\b(\d{3})\b(\s+local\s+time)").unwrap());
+    // Zero-pad 3-digit times before 'local time'
+    static LOCAL_TIME: Lazy<Regex> = Lazy::new(|| Regex::new(r"\b(\d{3})\b(?=\s+local\s+time)").unwrap());
     t = LOCAL_TIME.replace_all(&t, |caps: &regex::Captures| {
-        format!("0{}{}", &caps[1], &caps[2])
+        format!("0{}", &caps[1])
     }).to_string();
 
     t
