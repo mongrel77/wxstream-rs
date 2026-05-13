@@ -82,22 +82,31 @@ pub fn extract_wind(text: &str, full_text: &str) -> WindResult {
         }
 
         // Variable wind range: 'variable between X and Y'
+        // Exclude matches preceded by 'visibility' or 'ceiling' — those are
+        // visibility/ceiling variability remarks, not wind direction variability.
+        // Additionally guard that lo/hi are valid compass bearings (0-360).
         static VAR_RANGE: Lazy<Regex> = Lazy::new(|| {
             Regex::new(r"(?i)variable[\s,]+between[\s,]+(\d+)[\s,]+and[\s,]+(\d+)").unwrap()
         });
         let mut var_part  = String::new();
         let mut var_metar = String::new();
         for cap in VAR_RANGE.captures_iter(ft) {
-            let before_start = VAR_RANGE.find(ft).map(|m| m.start()).unwrap_or(0);
-            let before = &ft[..before_start.min(ft.len())];
-            let before_25 = &before[before.len().saturating_sub(25)..];
-            if !before_25.to_lowercase().contains("visibility") {
-                let lo = cap[1].parse::<u32>().unwrap_or(0);
-                let hi = cap[2].parse::<u32>().unwrap_or(0);
-                var_part  = format!(", variable {:03}-{:03}", lo, hi);
-                var_metar = format!(" {:03}V{:03}", lo, hi);
-                break;
+            let m = VAR_RANGE.find(ft).unwrap();
+            let before = &ft[..m.start()];
+            let before_ctx = &before[before.len().saturating_sub(30)..];
+            let before_lc = before_ctx.to_lowercase();
+            if before_lc.contains("visibility") || before_lc.contains("ceiling") {
+                continue;
             }
+            let lo = cap[1].parse::<u32>().unwrap_or(999);
+            let hi = cap[2].parse::<u32>().unwrap_or(999);
+            // Wind variable headings are compass bearings (0-360); reject altitude values
+            if lo > 360 || hi > 360 {
+                continue;
+            }
+            var_part  = format!(", variable {:03}-{:03}", lo, hi);
+            var_metar = format!(" {:03}V{:03}", lo, hi);
+            break;
         }
 
         return WindResult {

@@ -1,9 +1,9 @@
-use crate::models::Station;
+use crate::models::Site;
 
 /// Build a station-specific prompt that primes Whisper with the exact
 /// identifier and location name it should expect to hear in the audio.
 /// Mirrors build_transcription_prompt() from transcribe.py exactly.
-pub fn build_transcription_prompt(station: &Station) -> String {
+pub fn build_transcription_prompt(site: &Site) -> String {
     format!(
         "{id} {location} automated weather observation. \
         One four three niner zulu.\
@@ -19,12 +19,12 @@ pub fn build_transcription_prompt(station: &Station) -> String {
         broken, scattered, few, clear, calm, visibility, variable. \
         Remarks: Density Altitude one thousand one hundred.\
         Thunderstorm information not available.",
-        id       = station.id,
-        location = station.location,
+        id       = site.id,
+        location = site.loc_name,
     )
 }
 
-/// Fallback prompt when station metadata is unavailable.
+/// Fallback prompt when site metadata is unavailable.
 pub fn generic_prompt() -> String {
     "Automated weather observation. \
     Wind: two seven zero at one five knots. \

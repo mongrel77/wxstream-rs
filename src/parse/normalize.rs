@@ -13,8 +13,9 @@ pub fn normalize(text: &str) -> String {
     t = VIS_PRESPLIT.replace_all(&t, "$1$2. $3$4").to_string();
 
     // Collapse hyphen-separated single digits: 1-4-5-2 -> 1452
+    // Use \b instead of lookbehind/lookahead (not supported in Rust regex)
     static HYPHEN_DIGITS: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"(?<!\w)(\d)(?:-(\d))+(?!\w)").unwrap()
+        Regex::new(r"\b(\d)(?:-(\d))+\b").unwrap()
     });
     t = HYPHEN_DIGITS.replace_all(&t, |caps: &regex::Captures| {
         caps[0].replace('-', "")
@@ -132,22 +133,20 @@ pub fn normalize(text: &str) -> String {
     static THOU_SEP_DASH: Lazy<Regex> = Lazy::new(|| Regex::new(r"\b(\d{1,2})-000\b").unwrap());
     t = THOU_SEP_DASH.replace_all(&t, "${1}000").to_string();
 
-    // Spoken decimal point
-    static DECIMAL: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)(?<=\d)\s+point\s+(?=\d)").unwrap());
-    // Use a simpler approach since lookbehind isn't supported in Rust regex
+    // Spoken decimal point: '128 point 45' -> '128.45'
     static DECIMAL2: Lazy<Regex> = Lazy::new(|| Regex::new(r"(\d)\s+[Pp]oint\s+(\d)").unwrap());
     t = DECIMAL2.replace_all(&t, "$1.$2").to_string();
 
-    // Zero-pad 3-digit times before 'local time'
-    static LOCAL_TIME: Lazy<Regex> = Lazy::new(|| Regex::new(r"\b(\d{3})\b(?=\s+local\s+time)").unwrap());
+    // Zero-pad 3-digit times before 'local time': '700 local time' -> '0700 local time'
+    static LOCAL_TIME: Lazy<Regex> = Lazy::new(|| Regex::new(r"\b(\d{3})\b(\s+local\s+time)").unwrap());
     t = LOCAL_TIME.replace_all(&t, |caps: &regex::Captures| {
-        format!("0{}", &caps[1])
+        format!("0{}{}", &caps[1], &caps[2])
     }).to_string();
 
     t
 }
 
-/// Truncate digit-storm hallucinations — runs of comma-separated spoken digits.
+/// Truncate digit-storm hallucinations - runs of comma-separated spoken digits.
 /// Mirrors _truncate_digit_storm() from parse_transcripts.py.
 pub fn truncate_digit_storm(text: &str, min_run: usize) -> String {
     let digit_word = "(?:zero|one|two|three|four|five|six|seven|eight|niner|nine)";
@@ -164,12 +163,17 @@ pub fn truncate_digit_storm(text: &str, min_run: usize) -> String {
     text.to_string()
 }
 
-/// Strip preamble — find the last complete broadcast loop.
+/// Strip preamble - find the last complete broadcast loop.
 /// Returns (segment_text, obs_time_4digit).
 /// Mirrors strip_preamble() from parse_transcripts.py.
+///
+/// Pattern broadened to handle:
+///   - Title-case "Automated Weather Observation" (KJEF-style ASOS)
+///   - Period-only separator "Observation.1453 zulu" (no space before time)
+///   - Optional whitespace between keywords
 pub fn strip_preamble(text: &str) -> (String, Option<String>) {
     static PATTERN: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"(?i)[Aa]utomated weather observation[.\s,]+(\d{4})[.\s,]*[Zz]ulu(?:[Ww]eather)?").unwrap()
+        Regex::new(r"(?i)automated\s+weather\s+observation[.\s,]+(\d{4})[.\s,]*zulu[.\s,]*(?:weather)?").unwrap()
     });
 
     let matches: Vec<_> = PATTERN.find_iter(text).collect();

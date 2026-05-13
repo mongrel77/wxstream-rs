@@ -97,8 +97,9 @@ pub fn extract_sky(text: &str) -> SkyResult {
     for m in ALT_SCT.captures_iter(text) { add(&m[1], "SCT"); }
 
     // Few patterns
+    // "few clouds at 600" — the word "clouds" is optional between "few" and the altitude
     static FEW_AT: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"(?i)few[\s.,]+(?:at\s+)?(\d[\d,]+)").unwrap()
+        Regex::new(r"(?i)few[\s.,]+(?:clouds?\s+)?(?:at\s+)?(\d[\d,]+)").unwrap()
     });
     for m in FEW_AT.captures_iter(text) { add(&m[1], "FEW"); }
 

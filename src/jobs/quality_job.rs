@@ -4,11 +4,10 @@ use tokio::time::{sleep, Duration};
 use crate::{
     config::Config,
     db::Db,
+    models::{QualityResult, QualityStatus},
     quality,
 };
 
-/// Continuously polls for "quality_pending" records and runs the
-/// Claude quality agent to validate parsed weather data.
 pub async fn run(cfg: Arc<Config>, db: Arc<Db>) {
     let poll_interval = Duration::from_secs(cfg.jobs.quality_poll_interval_s);
     let concurrency   = cfg.jobs.quality_concurrency;
@@ -19,69 +18,53 @@ pub async fn run(cfg: Arc<Config>, db: Arc<Db>) {
     loop {
         let mut claimed = 0;
         while claimed < concurrency {
-            match db.claim_for_quality().await {
-                Ok(Some(record)) => {
+            match db.claim_quality_job().await {
+                Ok(Some((job, metar, tx))) => {
                     claimed += 1;
                     let cfg = cfg.clone();
                     let db  = db.clone();
                     let sem = semaphore.clone();
 
                     tokio::spawn(async move {
-                        let _permit    = sem.acquire_owned().await.unwrap();
-                        let id         = record.id.unwrap();
-                        let station_id = record.station_id.clone();
+                        let _permit  = sem.acquire_owned().await.unwrap();
+                        let job_id   = job.id.unwrap();
+                        let metar_id = metar.id.unwrap();
+                        let site_id  = job.site_id.clone();
 
-                        let parsed = match &record.parsed {
-                            Some(p) => p.clone(),
-                            None => {
-                                tracing::warn!("[{}] Quality check: no parsed data", station_id);
-                                let _ = db.mark_quality_result(
-                                    id,
-                                    &crate::models::QualityDoc {
-                                        notes: Some("No parsed data available".into()),
-                                        human_reviewed: false,
-                                        ..Default::default()
-                                    },
-                                    crate::models::QualityStatus::NeedsReview,
-                                ).await;
-                                return;
-                            }
-                        };
-
-                        tracing::info!("[{}] Running quality check", station_id);
+                        tracing::info!("[{}] Running quality check", site_id);
 
                         match quality::run_quality_check(
                             &cfg.anthropic,
-                            &station_id,
-                            &record.transcription,
-                            &parsed,
+                            &site_id,
+                            &tx.raw_transcript,
+                            tx.cleaned_transcript.as_deref(),
+                            &metar,
                         ).await {
-                            Ok((quality_doc, status)) => {
-                                let needs_review = status == crate::models::QualityStatus::NeedsReview;
-                                let confidence   = quality_doc.confidence.unwrap_or(0.0);
-
+                            Ok((quality_result, status)) => {
                                 tracing::info!(
-                                    "[{}] Quality check: confidence={:.2} needs_review={} flagged={:?}",
-                                    station_id,
-                                    confidence,
-                                    needs_review,
-                                    quality_doc.flagged_fields,
+                                    "[{}] Quality: confidence={:.2} needs_review={} flagged={:?}",
+                                    site_id,
+                                    quality_result.confidence.unwrap_or(0.0),
+                                    status == QualityStatus::NeedsReview,
+                                    quality_result.flagged_fields,
                                 );
-
-                                if let Err(e) = db.mark_quality_result(id, &quality_doc, status).await {
-                                    tracing::error!("[{}] Failed to write quality result: {}", station_id, e);
+                                if let Err(e) = db.complete_quality_job(
+                                    job_id, metar_id, &quality_result, status,
+                                ).await {
+                                    tracing::error!("[{}] Failed to save quality result: {}", site_id, e);
                                 }
                             }
                             Err(e) => {
-                                tracing::error!("[{}] Quality agent failed: {}", station_id, e);
-                                let _ = db.mark_quality_result(
-                                    id,
-                                    &crate::models::QualityDoc {
+                                tracing::error!("[{}] Quality agent failed: {}", site_id, e);
+                                let _ = db.complete_quality_job(
+                                    job_id,
+                                    metar_id,
+                                    &QualityResult {
                                         notes: Some(format!("Agent error: {}", e)),
                                         human_reviewed: false,
                                         ..Default::default()
                                     },
-                                    crate::models::QualityStatus::Failed,
+                                    QualityStatus::Failed,
                                 ).await;
                             }
                         }
@@ -94,7 +77,6 @@ pub async fn run(cfg: Arc<Config>, db: Arc<Db>) {
                 }
             }
         }
-
         sleep(poll_interval).await;
     }
 }
