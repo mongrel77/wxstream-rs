@@ -173,10 +173,18 @@ pub fn truncate_digit_storm(text: &str, min_run: usize) -> String {
 ///   - Optional whitespace between keywords
 pub fn strip_preamble(text: &str) -> (String, Option<String>) {
     static PATTERN: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"(?i)automated\s+weather\s+observation[.\s,]+(\d{4})[.\s,]*zulu[.\s,]*(?:weather)?").unwrap()
+        Regex::new(r"(?i)automated\s+weather\s+observation[.\s,]+(\d{4})[.\s,]*zulu[.\s,]*").unwrap()
     });
 
     let matches: Vec<_> = PATTERN.find_iter(text).collect();
+    tracing::debug!("strip_preamble: found {} anchor(s) in text of len {}", matches.len(), text.len());
+    if !matches.is_empty() {
+        tracing::debug!("strip_preamble: first match: {:?}", &text[matches[0].start()..matches[0].end()]);
+    } else {
+        // Log first 200 chars of normalized text to diagnose
+        let preview = &text[..text.len().min(200)];
+        tracing::debug!("strip_preamble: no anchors found. text preview: {:?}", preview);
+    }
     if matches.is_empty() {
         return (text.to_string(), None);
     }

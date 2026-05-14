@@ -72,7 +72,7 @@ pub struct ParsedWeather {
 /// Returns an empty Vec if fewer than 2 loops are found.
 fn loop_segments(norm_full: &str) -> Vec<String> {
     static LOOP_PAT: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"(?i)automated\s+weather\s+observation[.\s,]+\d{4}[.\s,]*zulu[.\s,]*(?:weather)?").unwrap()
+        Regex::new(r"(?i)automated\s+weather\s+observation[.\s,]+\d{4}[.\s,]*zulu[.\s,]*").unwrap()
     });
     let matches: Vec<_> = LOOP_PAT.find_iter(norm_full).collect();
     if matches.len() < 2 {
@@ -153,8 +153,8 @@ fn majority_vote_temp(
 // ---------------------------------------------------------------------------
 
 pub fn parse(input: &ParseInput) -> ParsedWeather {
-    let raw = truncate_digit_storm(input.raw_transcript, 8);
-    let norm_full = normalize(&raw);
+    let norm_full = normalize(input.raw_transcript);
+    let norm_full = truncate_digit_storm(&norm_full, 8);
     let (norm, selected_loop_time) = strip_preamble(&norm_full);
     let rec_day = input.recorded_at.format("%d").to_string();
 

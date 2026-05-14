@@ -6,7 +6,7 @@ use regex::Regex;
 /// Operates on the raw (un-normalized) transcript.
 pub fn extract_local_info(raw_text: &str) -> Option<String> {
     static ANCHOR: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"(?i)[Aa]utomated\s+[Ww]eather\s+[Oo]bservation[.\s,]+\d{4}[.\s,]*[Zz]ulu[.\s,]*(?:[Ww]eather)?")
+        Regex::new(r"(?i)[Aa]utomated\s+[Ww]eather\s+[Oo]bservation[.\s,]+\d{4}[.\s,]*[Zz]ulu[.\s,]*")
             .unwrap()
     });
 

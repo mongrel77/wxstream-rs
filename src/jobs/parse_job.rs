@@ -41,8 +41,17 @@ pub async fn run(
 
                         let raw_transcript = tx.cleaned_transcript
                             .as_deref()
+                            .filter(|s| !s.is_empty())
                             .unwrap_or(&tx.raw_transcript)
                             .to_string();
+
+                        tracing::debug!(
+                            "[{}] Transcript len={} raw_len={} cleaned_len={}",
+                            site_id,
+                            raw_transcript.len(),
+                            tx.raw_transcript.len(),
+                            tx.cleaned_transcript.as_deref().unwrap_or("").len()
+                        );
 
                         let (location, station_type) = sites.get(site_id.as_str())
                             .map(|s| (s.loc_name.clone(), s.site_type.clone()))
