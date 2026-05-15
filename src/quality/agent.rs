@@ -2,38 +2,41 @@ use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    config::AnthropicConfig,
+    config::OpenAiConfig,
     models::{MetarEntry, QualityResult, QualityStatus},
 };
 
 // ---------------------------------------------------------------------------
-// Claude API types
+// OpenAI API types
 // ---------------------------------------------------------------------------
 
 #[derive(Serialize)]
-struct ClaudeRequest {
-    model:      String,
-    max_tokens: u32,
-    system:     String,
-    messages:   Vec<ClaudeMessage>,
+struct OpenAiRequest {
+    model:       String,
+    max_tokens:  u32,
+    messages:    Vec<OpenAiMessage>,
+    temperature: f32,
 }
 
 #[derive(Serialize)]
-struct ClaudeMessage {
+struct OpenAiMessage {
     role:    String,
     content: String,
 }
 
 #[derive(Deserialize)]
-struct ClaudeResponse {
-    content: Vec<ClaudeContent>,
+struct OpenAiResponse {
+    choices: Vec<OpenAiChoice>,
 }
 
 #[derive(Deserialize)]
-struct ClaudeContent {
-    #[serde(rename = "type")]
-    content_type: String,
-    text:         Option<String>,
+struct OpenAiChoice {
+    message: OpenAiChoiceMessage,
+}
+
+#[derive(Deserialize)]
+struct OpenAiChoiceMessage {
+    content: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -49,40 +52,14 @@ struct AgentResult {
 // System prompt
 // ---------------------------------------------------------------------------
 
-const SYSTEM_PROMPT: &str = r#"You are a quality control agent for AWOS/ASOS weather data parsed from audio transcriptions.
-
-Review the parsed weather data alongside the raw transcript and:
-1. Identify fields marked N/A that could be extracted with more careful reading
-2. Flag implausible values (e.g. temperature of 85C, altimeter of 50.00)
-3. Validate METAR format correctness
-4. Check internal consistency (dewpoint must not exceed temperature)
-
-Valid ranges:
-- Wind direction: 000-360 degrees
-- Wind speed: 0-100 knots (gusts up to 120)
-- Visibility: 0-10 SM (can be >10 with > prefix)
-- Sky height: 100-25000 ft
-- Temperature: -60C to +50C
-- Dewpoint: -80C to +35C (always <= temperature)
-- Altimeter: 28.00-31.00 inHg
-
-Respond ONLY with valid JSON, no preamble or markdown:
-{
-  "confidence": <float 0.0-1.0>,
-  "flagged_fields": [<field names with issues>],
-  "notes": "<brief explanation>",
-  "corrections": null or {<field>: <corrected_value>},
-  "needs_review": <true|false>
-}
-
-Flag for review when: confidence < 0.7, implausible values, dewpoint > temperature, malformed METAR, or multiple N/A fields that should have values."#;
+const SYSTEM_PROMPT: &str = "You are a quality control agent for AWOS/ASOS weather data parsed from audio transcriptions.\n\nReview the parsed weather data alongside the raw transcript and:\n1. Identify fields marked N/A that could be extracted with more careful reading\n2. Flag implausible values (e.g. temperature of 85C, altimeter of 50.00)\n3. Validate METAR format correctness\n4. Check internal consistency (dewpoint must not exceed temperature)\n5. Review any validation_warnings already flagged by the parser\n\nValid ranges:\n- Wind direction: 000-360 degrees\n- Wind speed: 0-100 knots (gusts up to 120)\n- Visibility: 0-10 SM (can be >10 with > prefix)\n- Sky height: 100-25000 ft\n- Temperature: -60C to +50C\n- Dewpoint: -80C to +35C (always <= temperature)\n- Altimeter: 27.50-32.00 inHg\n\nRespond ONLY with valid JSON, no preamble or markdown:\n{\n  \"confidence\": <float 0.0-1.0>,\n  \"flagged_fields\": [<field names with issues>],\n  \"notes\": \"<brief explanation>\",\n  \"corrections\": null or {<field>: <corrected_value>},\n  \"needs_review\": <true|false>\n}\n\nFlag for review when: confidence < 0.7, implausible values, dewpoint > temperature, malformed METAR, or multiple N/A fields that should have values.";
 
 // ---------------------------------------------------------------------------
 // Public entry point
 // ---------------------------------------------------------------------------
 
 pub async fn run_quality_check(
-    cfg:                &AnthropicConfig,
+    cfg:                &OpenAiConfig,
     site_id:            &str,
     raw_transcript:     &str,
     cleaned_transcript: Option<&str>,
@@ -90,44 +67,46 @@ pub async fn run_quality_check(
 ) -> Result<(QualityResult, QualityStatus)> {
     let user_content = build_user_prompt(site_id, raw_transcript, cleaned_transcript, metar);
 
-    let request = ClaudeRequest {
-        model:      cfg.model.clone(),
-        max_tokens: cfg.max_tokens,
-        system:     SYSTEM_PROMPT.to_string(),
-        messages:   vec![ClaudeMessage {
-            role:    "user".to_string(),
-            content: user_content,
-        }],
+    let request = OpenAiRequest {
+        model:       "gpt-4o-mini".to_string(),
+        max_tokens:  1024,
+        temperature: 0.0,
+        messages:    vec![
+            OpenAiMessage {
+                role:    "system".to_string(),
+                content: SYSTEM_PROMPT.to_string(),
+            },
+            OpenAiMessage {
+                role:    "user".to_string(),
+                content: user_content,
+            },
+        ],
     };
 
     let client = reqwest::Client::new();
     let resp = client
-        .post("https://api.anthropic.com/v1/messages")
-        .header("x-api-key", &cfg.api_key)
-        .header("anthropic-version", "2023-06-01")
-        .header("content-type", "application/json")
+        .post("https://api.openai.com/v1/chat/completions")
+        .bearer_auth(&cfg.api_key)
         .json(&request)
         .send()
         .await
-        .context("Claude API request failed")?;
+        .context("OpenAI API request failed")?;
 
     if !resp.status().is_success() {
         let status = resp.status();
         let body   = resp.text().await.unwrap_or_default();
-        bail!("Claude API error {}: {}", status, body);
+        bail!("OpenAI API error {}: {}", status, body);
     }
 
-    let claude_resp: ClaudeResponse = resp
+    let openai_resp: OpenAiResponse = resp
         .json()
         .await
-        .context("Failed to parse Claude response")?;
+        .context("Failed to parse OpenAI response")?;
 
-    let text = claude_resp.content.iter()
-        .filter(|c| c.content_type == "text")
-        .filter_map(|c| c.text.as_ref())
-        .cloned()
-        .collect::<Vec<_>>()
-        .join("");
+    let text = openai_resp.choices
+        .first()
+        .map(|c| c.message.content.clone())
+        .unwrap_or_default();
 
     let clean = text.trim()
         .trim_start_matches("```json")
@@ -146,7 +125,7 @@ pub async fn run_quality_check(
 
     let quality_result = QualityResult {
         reviewed_at:    Some(chrono::Utc::now()),
-        model:          Some(cfg.model.clone()),
+        model:          Some("gpt-4o-mini".to_string()),
         confidence:     Some(result.confidence),
         flagged_fields: result.flagged_fields,
         notes:          Some(result.notes),

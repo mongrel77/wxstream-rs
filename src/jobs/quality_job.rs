@@ -34,7 +34,7 @@ pub async fn run(cfg: Arc<Config>, db: Arc<Db>) {
                         tracing::info!("[{}] Running quality check", site_id);
 
                         match quality::run_quality_check(
-                            &cfg.anthropic,
+                            &cfg.openai,
                             &site_id,
                             &tx.raw_transcript,
                             tx.cleaned_transcript.as_deref(),

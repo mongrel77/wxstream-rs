@@ -1,4 +1,5 @@
 pub mod altimeter;
+pub mod audit;
 pub mod local_info;
 pub mod normalize;
 pub mod sky;
@@ -64,6 +65,7 @@ pub struct ParsedWeather {
     pub metar:               Option<String>,
     pub local_info:          Option<String>,
     pub validation_warnings: Vec<String>,
+    pub audit_warnings:      Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -263,6 +265,7 @@ pub fn parse(input: &ParseInput) -> ParsedWeather {
         metar:               Some(metar_str),
         local_info,
         validation_warnings: Vec::new(),
+        audit_warnings:      Vec::new(),
     };
 
     // Run sanity validation — clears implausible field values in place
@@ -275,6 +278,17 @@ pub fn parse(input: &ParseInput) -> ParsedWeather {
         );
     }
     result.validation_warnings = validation.warnings;
+
+    // Run transcript audit — checks for keywords that should have produced values
+    let audit_warnings = audit::audit(&norm_full, &result);
+    if !audit_warnings.is_empty() {
+        tracing::warn!(
+            "Audit warnings for {}: {:?}",
+            input.station_id,
+            audit_warnings
+        );
+    }
+    result.audit_warnings = audit_warnings;
 
     result
 }

@@ -227,6 +227,7 @@ pub struct MetarEntry {
     pub quality_status:      QualityStatus,
     pub quality:             Option<QualityResult>,
     pub validation_warnings: Vec<String>,
+    pub audit_warnings:      Vec<String>,
 
     pub created_at:          DateTime<Utc>,
     pub updated_at:          DateTime<Utc>,

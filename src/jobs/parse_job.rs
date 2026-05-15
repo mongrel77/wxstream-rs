@@ -4,7 +4,7 @@ use tokio::time::{sleep, Duration};
 use crate::{
     config::Config,
     db::Db,
-    models::{MetarEntry, QualityStatus, Site, SkyCondition, WindEntry},
+    models::{JobStage, MetarEntry, ProcessingJob, QualityStatus, Site, SkyCondition, WindEntry},
     parse::{self, ParseInput},
 };
 
@@ -112,6 +112,7 @@ pub async fn run(
                             quality_status:      QualityStatus::Pending,
                             quality:             None,
                             validation_warnings: parsed.validation_warnings,
+                            audit_warnings:      parsed.audit_warnings,
                             created_at:          now,
                             updated_at:          now,
                         };
@@ -119,6 +120,31 @@ pub async fn run(
                         if let Err(e) = db.complete_parse_job(job_id, &metar).await {
                             tracing::error!("[{}] Failed to complete parse job: {}", site_id, e);
                             let _ = db.fail_job(job_id, &e.to_string()).await;
+                            return;
+                        }
+
+                        // Only create a quality job if there are warnings
+                        let needs_quality = !metar.audit_warnings.is_empty()
+                            || !metar.validation_warnings.is_empty();
+
+                        if needs_quality {
+                            let quality_job = ProcessingJob::new(
+                                rec_id,
+                                site_id.clone(),
+                                JobStage::Quality,
+                            );
+                            if let Err(e) = db.create_job(&quality_job).await {
+                                tracing::warn!("[{}] Failed to create quality job: {}", site_id, e);
+                            } else {
+                                tracing::info!(
+                                    "[{}] Quality job created ({} audit + {} validation warnings)",
+                                    site_id,
+                                    metar.audit_warnings.len(),
+                                    metar.validation_warnings.len(),
+                                );
+                            }
+                        } else {
+                            tracing::info!("[{}] No warnings - skipping quality job", site_id);
                         }
                     });
                 }
