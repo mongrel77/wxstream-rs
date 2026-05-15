@@ -159,14 +159,15 @@ pub struct Phenomenon {
 }
 
 const PHENOMENA: &[(&str, &str, &str)] = &[
-    ("Thunderstorm",     "TS",   r"(?i)\bthunderstorm\b(?![\s.,]+information)"),
+    // Thunderstorm: exclude "thunderstorm information not available" - matched by TSNO separately
+    ("Thunderstorm",     "TS",   r"(?i)\bthunderstorm(?:\s+(?:and|with|in|near|overhead)\b|\s*[,.]|\s*$)"),
     ("Freezing Rain",    "FZRA", r"(?i)\bfreezing\s+rain\b"),
     ("Freezing Drizzle", "FZDZ", r"(?i)\bfreezing\s+drizzle\b"),
     ("Freezing Fog",     "FZFG", r"(?i)\bfreezing\s+fog\b"),
     ("Rain",             "RA",   r"(?i)\brain\b"),
     ("Drizzle",          "DZ",   r"(?i)\bdrizzle\b"),
-    ("Snow",             "SN",   r"(?i)\bsnow\b(?!\s+grains)"),
     ("Snow Grains",      "SG",   r"(?i)\bsnow\s+grains\b"),
+    ("Snow",             "SN",   r"(?i)\bsnow\b"),
     ("Ice Pellets",      "PL",   r"(?i)\bice\s+pellets\b"),
     ("Ice Crystals",     "IC",   r"(?i)\bice\s+crystals\b"),
     ("Hail",             "GR",   r"(?i)\bhail\b"),
@@ -183,7 +184,7 @@ const PHENOMENA: &[(&str, &str, &str)] = &[
     ("Blowing Dust",     "BLDU", r"(?i)\bblowing\s+dust\b"),
     ("Blowing Sand",     "BLSA", r"(?i)\bblowing\s+sand\b"),
     ("Smoke",            "FU",   r"(?i)\bsmoke\b"),
-    ("Dust",             "DU",   r"(?i)\bdust\b(?!\s+\d)"),
+    ("Dust",             "DU",   r"(?i)\bdust\b"),
     ("Sand",             "SA",   r"(?i)\bsand\b"),
     ("Dust/Sand Storm",  "SS",   r"(?i)\b(?:dust|sand)\s+storm\b"),
 ];

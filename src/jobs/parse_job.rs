@@ -111,6 +111,7 @@ pub async fn run(
                             local_info:          parsed.local_info,
                             quality_status:      QualityStatus::Pending,
                             quality:             None,
+                            validation_warnings: parsed.validation_warnings,
                             created_at:          now,
                             updated_at:          now,
                         };

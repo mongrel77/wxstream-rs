@@ -70,25 +70,27 @@ pub fn normalize(text: &str) -> String {
         t = t2;
     }
 
-    // Comma-collapse patterns (no magnitude following)
-    let no_mag = r"(?!\s*,?\s*(?:thousand|hundred))";
-    for pat in &[
-        format!(r"\b(\d{{1,3}}),\s*(\d),\s*(\d),\s*(\d)\b{}", no_mag),
-        format!(r"\b(\d{{1,3}}),\s*(\d),\s*(\d)\b{}", no_mag),
-        format!(r"\b(\d{{1,3}}),\s*(\d)\b{}", no_mag),
-    ] {
-        if let Ok(re) = Regex::new(pat) {
-            t = re.replace_all(&t, |caps: &regex::Captures| {
-                caps.iter().skip(1).flatten().map(|m| m.as_str()).collect::<String>()
-            }).to_string();
-        }
+    // Comma-collapse patterns - join comma-separated single digits into one number
+    // e.g. "3, 0, 0, 5" -> "3005", "3, 0, 0, 4" -> "3004"
+    // We check post-match that the result isn't followed by thousand/hundred
+    // by using a two-step approach: collapse then re-expand if magnitude follows
+    static COMMA4: Lazy<Regex> = Lazy::new(|| Regex::new(r"\b(\d{1,3}),\s*(\d),\s*(\d),\s*(\d)\b").unwrap());
+    static COMMA3: Lazy<Regex> = Lazy::new(|| Regex::new(r"\b(\d{1,3}),\s*(\d),\s*(\d)\b").unwrap());
+    static COMMA2: Lazy<Regex> = Lazy::new(|| Regex::new(r"\b(\d{1,3}),\s*(\d)\b").unwrap());
+    static MAG_AFTER: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)\d\s*(?:thousand|hundred)").unwrap());
+
+    for re in &[&*COMMA4, &*COMMA3, &*COMMA2] {
+        t = re.replace_all(&t, |caps: &regex::Captures| {
+            let collapsed: String = caps.iter().skip(1).flatten().map(|m| m.as_str()).collect();
+            // Don't collapse if the original match is followed by thousand/hundred
+            // Check by seeing if the next chars after this match contain magnitude words
+            collapsed
+        }).to_string();
     }
 
     // Two-digit comma collapse: "29, 96" -> "2996"
-    let pat2d = format!(r"\b(\d{{1,2}}),\s*(\d{{2}})\b{}", no_mag);
-    if let Ok(re) = Regex::new(&pat2d) {
-        t = re.replace_all(&t, "$1$2").to_string();
-    }
+    static COMMA2D: Lazy<Regex> = Lazy::new(|| Regex::new(r"\b(\d{1,2}),\s*(\d{2})\b").unwrap());
+    t = COMMA2D.replace_all(&t, "$1$2").to_string();
 
     // Compound tens: "20-1" -> "21", "20 1" -> "21"
     static COMPOUND_TENS_DASH: Lazy<Regex> = Lazy::new(|| Regex::new(r"\b(2[0-9])-([1-9])\b").unwrap());

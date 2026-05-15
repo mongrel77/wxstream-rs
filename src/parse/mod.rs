@@ -3,6 +3,7 @@ pub mod local_info;
 pub mod normalize;
 pub mod sky;
 pub mod temperature;
+pub mod validate;
 pub mod visibility;
 pub mod wind;
 
@@ -62,6 +63,7 @@ pub struct ParsedWeather {
     pub phenomena:           Vec<String>,
     pub metar:               Option<String>,
     pub local_info:          Option<String>,
+    pub validation_warnings: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -246,7 +248,7 @@ pub fn parse(input: &ParseInput) -> ParsedWeather {
     let sky_parsed       = build_sky(&sky_result);
     let local_info       = extract_local_info(input.raw_transcript);
 
-    ParsedWeather {
+    let mut result = ParsedWeather {
         selected_loop_time,
         time:                Some(time_str),
         wind:                Some(wind_parsed),
@@ -260,7 +262,21 @@ pub fn parse(input: &ParseInput) -> ParsedWeather {
         phenomena:           phenomena.into_iter().map(|p| p.code).collect(),
         metar:               Some(metar_str),
         local_info,
+        validation_warnings: Vec::new(),
+    };
+
+    // Run sanity validation — clears implausible field values in place
+    let validation = validate::validate(&mut result);
+    if !validation.is_clean() {
+        tracing::warn!(
+            "Validation warnings for {}: {:?}",
+            input.station_id,
+            validation.warnings
+        );
     }
+    result.validation_warnings = validation.warnings;
+
+    result
 }
 
 // ---------------------------------------------------------------------------
