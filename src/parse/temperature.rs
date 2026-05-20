@@ -58,6 +58,12 @@ pub fn extract_temp_dp(text: &str) -> TempResult {
                 let tf: f64 = t_fixed.parse().unwrap_or(0.0);
                 let df: f64 = d_fixed.parse().unwrap_or(0.0);
 
+                // Reject implausible parses early so they never enter majority voting:
+                // dewpoint cannot exceed temperature (with small float tolerance).
+                if df > tf + 0.5 {
+                    continue;
+                }
+
                 let t_metar = format_temp_metar(tf);
                 let d_metar = format_temp_metar(df);
 

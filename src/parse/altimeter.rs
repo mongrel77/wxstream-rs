@@ -98,34 +98,48 @@ pub fn extract_remarks(text: &str) -> String {
         remarks.push("Lightning sensor missing".into());
     }
 
-    // Lightning observed with direction
-    static LTG: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"(?i)lightning[\s.,]+(?:distance[\s.,]+|distant[\s.,]+|observed[\s.,]+)?(.*?)(?:\.|$|temperature|dewpoint|altimeter|remarks|density)").unwrap()
-    });
+    // Lightning observed with direction.
+    // Handles two transcript patterns:
+    //   "lightning distant northeast"   — direction inline
+    //   "lightning. Distant northeast." — direction sentence after a period
+    // Captures up to 60 chars after "lightning" (crossing sentence boundaries)
+    // then filters to only recognised compass-direction words.
     static LTG_SENSOR: Lazy<Regex> = Lazy::new(|| {
         Regex::new(r"(?i)lightning\s+(?:missing|sensor|information)").unwrap()
     });
+    static AFTER_LTG: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(r"(?i)lightning[\s.,]+(.{0,80})").unwrap()
+    });
+    static LTG_SPLIT: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(r"[\s,]+(?:through|and|to)[\s,]+|[\s,]+").unwrap()
+    });
     if !LTG_SENSOR.is_match(text) {
-        if let Some(m) = LTG.captures(text) {
-            let raw_dir = m[1].trim().trim_end_matches(|c| c == '.' || c == ',' || c == ' ');
-            if !raw_dir.is_empty() {
-                let dir_map = [
-                    ("north", "N"), ("south", "S"), ("east", "E"), ("west", "W"),
-                    ("northeast", "NE"), ("northwest", "NW"),
-                    ("southeast", "SE"), ("southwest", "SW"),
-                ];
-                static SPLIT: Lazy<Regex> = Lazy::new(|| {
-                    Regex::new(r"[\s,]+(?:through|and|to)[\s,]+|[\s,]+").unwrap()
-                });
-                let parts: Vec<&str> = SPLIT.split(raw_dir).collect();
-                let dirs: Vec<&str> = parts.iter().map(|p| {
+        let dir_map = [
+            ("north", "N"), ("south", "S"), ("east", "E"), ("west", "W"),
+            ("northeast", "NE"), ("northwest", "NW"),
+            ("southeast", "SE"), ("southwest", "SW"),
+            ("distant", ""), ("distance", ""), ("observed", ""), // skip qualifiers
+        ];
+        if let Some(caps) = AFTER_LTG.captures(text) {
+            let after = caps[1].trim();
+            // Stop at keywords that signal the next field
+            let stop = ["temperature", "dewpoint", "altimeter", "remarks", "density", "visibility"];
+            let after = stop.iter().fold(after.to_string(), |s, kw| {
+                if let Some(pos) = s.to_lowercase().find(kw) { s[..pos].to_string() } else { s }
+            });
+            let dir_words: Vec<&str> = LTG_SPLIT.split(after.trim())
+                .filter(|p| {
+                    let lc = p.to_lowercase();
+                    dir_map.iter().any(|(w, abbr)| lc == *w && !abbr.is_empty())
+                })
+                .collect();
+            if !dir_words.is_empty() {
+                let dir_str = dir_words.iter().map(|p| {
                     dir_map.iter().find(|(w, _)| p.to_lowercase() == *w)
-                        .map(|(_, a)| *a)
-                        .unwrap_or(p)
-                }).collect();
-                let dir_str = dirs.join("-");
+                        .map(|(_, a)| *a).unwrap_or(p)
+                }).collect::<Vec<_>>().join("-");
                 remarks.push(format!("Lightning {}", dir_str));
-            } else {
+            } else if AFTER_LTG.is_match(text) {
                 remarks.push("Lightning observed".into());
             }
         }

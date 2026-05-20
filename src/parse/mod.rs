@@ -232,18 +232,24 @@ pub fn parse(input: &ParseInput) -> ParsedWeather {
     // METAR
     let vis_metar = vis.replace(" SM", "SM").replace('>', "");
     let wx_metar  = phenomena.iter().map(|p| p.code.as_str()).collect::<Vec<_>>().join(" ");
-    let metar_str = format!(
-        "METAR {} {}{}Z AUTO {} {} {}{}{} {} RMK AO2",
-        input.station_id,
-        rec_day,
-        time_str.trim_end_matches('Z'),
-        wind_result.metar,
-        vis_metar,
-        if wx_metar.is_empty() { String::new() } else { format!("{} ", wx_metar) },
-        sky_result.metar,
-        temp_result.metar,
-        alt_result.metar,
-    );
+    // Sky "M" (sensor missing) and "N/A" must not be emitted literally into the METAR
+    // string — a bare "M" adjacent to the temp field produces e.g. "M28/21" which
+    // looks like a negative temperature. Omit the sky group when sensor has no data.
+    let sky_metar_field = match sky_result.metar.as_str() {
+        "M" | "Missing" | "N/A" => String::new(),
+        other => other.to_string(),
+    };
+    let mut metar_parts: Vec<String> = vec![
+        format!("METAR {} {}{}Z AUTO", input.station_id, rec_day, time_str.trim_end_matches('Z')),
+        wind_result.metar.clone(),
+        vis_metar.clone(),
+    ];
+    if !wx_metar.is_empty()        { metar_parts.push(wx_metar.clone()); }
+    if !sky_metar_field.is_empty() { metar_parts.push(sky_metar_field.clone()); }
+    metar_parts.push(temp_result.metar.clone());
+    metar_parts.push(alt_result.metar.clone());
+    metar_parts.push("RMK AO2".to_string());
+    let metar_str = metar_parts.join(" ");
 
     let density_altitude = extract_density_altitude(&remarks);
     let wind_parsed      = build_wind(&wind_result);
@@ -344,7 +350,13 @@ fn build_wind(result: &wind::WindResult) -> ParsedWind {
     let speed     = DIR_SPD.captures(&result.display).and_then(|c| c.get(2)).map(|m| m.as_str().to_string());
     let gust      = GUST.captures(&result.display).and_then(|c| c.get(1)).map(|m| m.as_str().to_string());
 
-    ParsedWind { direction, speed_kt: speed, gust_kt: gust, raw: Some(result.display.clone()), metar: Some(result.metar.clone()), ..Default::default() }
+    // Bug 3 fix: set variable=true when a variable range (NNNvNNN) is present in the
+    // METAR string. wind.rs captures the range into metar/display strings but the
+    // structured field was left None by ..Default::default().
+    static VAR_RANGE_METAR: Lazy<Regex> = Lazy::new(|| Regex::new(r"\d{3}V\d{3}").unwrap());
+    let variable = if VAR_RANGE_METAR.is_match(&result.metar) { Some(true) } else { None };
+
+    ParsedWind { direction, speed_kt: speed, gust_kt: gust, variable, raw: Some(result.display.clone()), metar: Some(result.metar.clone()), ..Default::default() }
 }
 
 fn build_sky(result: &sky::SkyResult) -> Vec<ParsedSky> {
