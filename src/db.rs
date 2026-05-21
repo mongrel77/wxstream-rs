@@ -10,7 +10,7 @@ use mongodb::{
 use crate::{
     config::MongoConfig,
     models::{
-        AudioRecording, JobStage, JobStatus, MetarEntry,
+        AudioRecording, JobStage, MetarEntry,
         ProcessingJob, QualityResult, QualityStatus, Site, Transcription,
     },
 };

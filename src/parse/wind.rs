@@ -111,7 +111,7 @@ pub fn extract_wind(text: &str, full_text: &str) -> WindResult {
 
         return WindResult {
             display: format!("{}° at {} kts{}{}", dir, spd, gust_part, var_part),
-            metar:   format!("{}{}{}{}", dir_s, spd_s, gust_metar, var_metar),
+            metar:   format!("{}{}{}KT{}", dir_s, spd_s, gust_metar, var_metar),
         };
     }
 

@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize, Clone)]
+#[allow(dead_code)]
 pub struct Config {
     pub mongodb:       MongoConfig,
     pub s3:            S3Config,
@@ -27,6 +28,7 @@ pub struct S3Config {
     pub trim_prefix: String,
 }
 
+#[allow(dead_code)]
 impl S3Config {
     /// S3 key for a raw audio chunk: recordings/KAIZ/raw/filename.wav
     pub fn raw_key(&self, station_id: &str, filename: &str) -> String {
@@ -47,6 +49,7 @@ pub struct OpenAiConfig {
 }
 
 #[derive(Debug, Deserialize, Clone)]
+#[allow(dead_code)]
 pub struct AnthropicConfig {
     pub api_key:    String,
     pub model:      String,

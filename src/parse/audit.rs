@@ -146,7 +146,7 @@ pub fn audit(transcript: &str, parsed: &ParsedWeather) -> Vec<String> {
     static SNOW: Lazy<Regex> = Lazy::new(|| Regex::new(r"\bsnow\b").unwrap());
     static FOG:  Lazy<Regex> = Lazy::new(|| Regex::new(r"\bfog\b").unwrap());
     static HAZE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\bhaze\b").unwrap());
-    static MIST: Lazy<Regex> = Lazy::new(|| Regex::new(r"\bmist\b").unwrap());
+    static MIST: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)\bmist\b|\bmissed\b|\bmiss\b").unwrap());
     static THDR: Lazy<Regex> = Lazy::new(|| {
         Regex::new(r"\bthunderstorm\b").unwrap()
     });
@@ -159,7 +159,7 @@ pub fn audit(transcript: &str, parsed: &ParsedWeather) -> Vec<String> {
 
     let phenomena_codes: Vec<&str> = parsed.phenomena.iter().map(|s| s.as_str()).collect();
 
-    let check_phenomenon = |re: &Regex, codes: &[&str], label: &str, warnings: &mut Vec<String>| {
+    let _check_phenomenon = |re: &Regex, codes: &[&str], label: &str, warnings: &mut Vec<String>| {
         if re.is_match(&t) && !codes.iter().any(|c| c.contains(label)) {
             warnings.push(format!(
                 "phenomena: transcript mentions {} but it was not captured in phenomena",

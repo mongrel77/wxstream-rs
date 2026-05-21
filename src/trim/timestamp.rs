@@ -107,7 +107,7 @@ fn station_name_start(
             just_skipped_direction = true;
             station_start += 1;
         } else {
-            just_skipped_direction = false;
+            let _ = just_skipped_direction; just_skipped_direction = false;
             break;
         }
     }

@@ -24,6 +24,7 @@ use wind::extract_wind;
 // ParseInput / ParsedWeather - local types, decoupled from MongoDB models
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)]
 pub struct ParseInput<'a> {
     pub raw_transcript: &'a str,
     pub station_id:     &'a str,
@@ -241,13 +242,22 @@ pub fn parse(input: &ParseInput) -> ParsedWeather {
     };
     let mut metar_parts: Vec<String> = vec![
         format!("METAR {} {}{}Z AUTO", input.station_id, rec_day, time_str.trim_end_matches('Z')),
-        wind_result.metar.clone(),
-        vis_metar.clone(),
     ];
-    if !wx_metar.is_empty()        { metar_parts.push(wx_metar.clone()); }
+    // Only emit fields that have real values — never write N/A or Missing into the METAR string
+    if wind_result.metar != "N/A" && wind_result.metar != "Missing" && wind_result.metar != "MIS" {
+        metar_parts.push(wind_result.metar.clone());
+    }
+    if !vis_metar.is_empty() && vis_metar != "N/A" && vis_metar != "Missing" {
+        metar_parts.push(vis_metar.clone());
+    }
+    if !wx_metar.is_empty() { metar_parts.push(wx_metar.clone()); }
     if !sky_metar_field.is_empty() { metar_parts.push(sky_metar_field.clone()); }
-    metar_parts.push(temp_result.metar.clone());
-    metar_parts.push(alt_result.metar.clone());
+    if temp_result.metar != "N/A" && temp_result.metar != "Missing" {
+        metar_parts.push(temp_result.metar.clone());
+    }
+    if alt_result.metar != "N/A" && alt_result.metar != "Missing" {
+        metar_parts.push(alt_result.metar.clone());
+    }
     metar_parts.push("RMK AO2".to_string());
     let metar_str = metar_parts.join(" ");
 

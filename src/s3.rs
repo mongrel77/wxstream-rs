@@ -115,6 +115,7 @@ pub fn content_type_for(path: &Path) -> &'static str {
 }
 
 /// Extract just the filename component from an S3 key.
+#[allow(dead_code)]
 pub fn filename_from_key(key: &str) -> &str {
     key.rsplit('/').next().unwrap_or(key)
 }

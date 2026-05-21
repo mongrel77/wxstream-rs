@@ -77,6 +77,7 @@ pub fn normalize(text: &str) -> String {
     static COMMA4: Lazy<Regex> = Lazy::new(|| Regex::new(r"\b(\d{1,3}),\s*(\d),\s*(\d),\s*(\d)\b").unwrap());
     static COMMA3: Lazy<Regex> = Lazy::new(|| Regex::new(r"\b(\d{1,3}),\s*(\d),\s*(\d)\b").unwrap());
     static COMMA2: Lazy<Regex> = Lazy::new(|| Regex::new(r"\b(\d{1,3}),\s*(\d)\b").unwrap());
+    #[allow(dead_code)]
     static MAG_AFTER: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)\d\s*(?:thousand|hundred)").unwrap());
 
     for re in &[&*COMMA4, &*COMMA3, &*COMMA2] {

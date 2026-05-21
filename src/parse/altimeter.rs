@@ -167,6 +167,7 @@ pub fn extract_remarks(text: &str) -> String {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct Phenomenon {
     pub display: String,
     pub code:    String,
@@ -211,9 +212,64 @@ const SUPPRESS_IF_PARENT: &[(&str, &[&str])] = &[
     ("GR",  &["GS"]),
 ];
 
+/// Extract the phenomena section of the transcript — the slice between the
+/// altimeter reading and the remarks/density keyword.  Phenomena are broadcast
+/// in this window, so Whisper transcription errors ("missed"/"miss" for "mist",
+/// "haze" mis-heard as "days", etc.) are only corrected inside this window to
+/// avoid corrupting other fields.
+fn phenomena_window(text: &str) -> String {
+    let tl = text.to_lowercase();
+
+    // Find start: just after the altimeter value  e.g. "altimeter 2991"
+    let start = {
+        static ALT_END: once_cell::sync::Lazy<regex::Regex> = once_cell::sync::Lazy::new(|| {
+            regex::Regex::new(r"(?i)altimeter[\s.,]+\d{4}").unwrap()
+        });
+        ALT_END.find(&tl).map(|m| m.end()).unwrap_or(0)
+    };
+
+    // Find end: start of remarks / density / next anchor
+    let end = {
+        static RMK_START: once_cell::sync::Lazy<regex::Regex> = once_cell::sync::Lazy::new(|| {
+            regex::Regex::new(r"(?i)(remarks|density\s+alt|automated\s+weather)").unwrap()
+        });
+        RMK_START.find(&tl[start..])
+            .map(|m| start + m.start())
+            .unwrap_or(tl.len())
+    };
+
+    let window = &text[start..end];
+
+    // Whisper substitution corrections — only applied within this window
+    // Each entry: (pattern, replacement)
+    let corrections: &[(&str, &str)] = &[
+        // "mist" commonly transcribed as "missed" or "miss"
+        (r"(?i)missed", "mist"),
+        (r"(?i)miss",   "mist"),
+        // "haze" occasionally heard as "days" or "hays"
+        (r"(?i)hays",   "haze"),
+        // "drizzle" sometimes heard as "Bristol" or "gristle"
+        // (add more as discovered from real transcripts)
+    ];
+
+    let mut w = window.to_string();
+    for (pat, rep) in corrections {
+        if let Ok(re) = regex::Regex::new(pat) {
+            w = re.replace_all(&w, *rep).to_string();
+        }
+    }
+    w
+}
+
 /// Mirrors extract_phenomena() from parse_transcripts.py.
 pub fn extract_phenomena(text: &str) -> Vec<Phenomenon> {
-    let text_lower = text.to_lowercase();
+    // Run phenomena extraction over both the full text (for phenomena reported
+    // inline with other fields) and the corrected phenomena window (for the
+    // dedicated phenomena slot between altimeter and remarks).
+    let window = phenomena_window(text);
+    // Merge: use window for the corrected slice, full text for anything outside
+    let combined = format!("{} {}", text, window);
+    let text_lower = combined.to_lowercase();
     let mut found_codes: Vec<String> = Vec::new();
     let mut found: Vec<Phenomenon> = Vec::new();
 

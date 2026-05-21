@@ -25,7 +25,7 @@ pub async fn run(
             match db.claim_parse_job().await {
                 Ok(Some((job, tx))) => {
                     claimed += 1;
-                    let cfg   = cfg.clone();
+                    let _cfg  = cfg.clone();
                     let db    = db.clone();
                     let sites = sites.clone();
                     let sem   = semaphore.clone();
