@@ -8,7 +8,7 @@ use crate::{
 };
 
 /// How long a job can be "pending" before it's considered stuck and reset.
-const STUCK_JOB_TIMEOUT_SECS: u64 = 300; // 5 minutes
+const STUCK_JOB_TIMEOUT_SECS: u64 = 120; // 2 minutes
 
 /// Continuously scans audio_recordings for type "raw" entries
 /// that don't yet have a transcribe job, and creates one.

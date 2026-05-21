@@ -40,7 +40,7 @@ pub fn extract_visibility(text: &str) -> String {
 
     // Find visibility value
     static VIS_RE: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"(?i)visibility[\s.,]+(more[\s.,]+than[\s.,]+)?(\d+\.?\d*)").unwrap()
+        Regex::new(r"(?i)visibility[\s.,]+(more[\s.,]+than[\s.,]+)?(\d+(?:\.\d+)?)").unwrap()
     });
 
     for caps in VIS_RE.captures_iter(&t) {

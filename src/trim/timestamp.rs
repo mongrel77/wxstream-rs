@@ -88,6 +88,7 @@ fn station_name_start(
     }
 
     // Skip direction words that are remark tail words
+    #[allow(unused_assignments)]
     let mut just_skipped_direction = false;
     while station_start < trigger_idx {
         let w = word_clean(&words[station_start].word);
@@ -107,7 +108,7 @@ fn station_name_start(
             just_skipped_direction = true;
             station_start += 1;
         } else {
-            let _ = just_skipped_direction; just_skipped_direction = false;
+            just_skipped_direction = false;
             break;
         }
     }

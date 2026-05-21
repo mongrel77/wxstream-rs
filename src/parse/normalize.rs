@@ -38,6 +38,27 @@ pub fn normalize(text: &str) -> String {
     static NINER_DIGIT: Lazy<Regex> = Lazy::new(|| Regex::new(r"\b(\d)er\b").unwrap());
     t = NINER_DIGIT.replace_all(&t, "$1").to_string();
 
+    // Ordinal Whisper mis-transcriptions — ordinals never appear in AWOS/ASOS broadcasts
+    // so these are always transcription errors for the corresponding cardinal number.
+    static FIRST:   Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)\bfirst\b").unwrap());
+    static SECOND:  Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)\bsecond\b").unwrap());
+    static THIRD:   Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)\bthird\b").unwrap());
+    static FOURTH:  Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)\bfourth\b").unwrap());
+    static FIFTH:   Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)\bfifth\b").unwrap());
+    static SIXTH:   Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)\bsixth\b").unwrap());
+    static SEVENTH: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)\bseventh\b").unwrap());
+    static EIGHTH:  Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)\beighth\b").unwrap());
+    static NINTH:   Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)\bninth\b").unwrap());
+    t = FIRST.replace_all(&t, "1").to_string();
+    t = SECOND.replace_all(&t, "2").to_string();
+    t = THIRD.replace_all(&t, "3").to_string();
+    t = FOURTH.replace_all(&t, "4").to_string();
+    t = FIFTH.replace_all(&t, "5").to_string();
+    t = SIXTH.replace_all(&t, "6").to_string();
+    t = SEVENTH.replace_all(&t, "7").to_string();
+    t = EIGHTH.replace_all(&t, "8").to_string();
+    t = NINTH.replace_all(&t, "9").to_string();
+
     // Spoken tens
     static TWENTY: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)\btwenty\b").unwrap());
     static THIRTY: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)\bthirty\b").unwrap());

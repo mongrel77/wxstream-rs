@@ -327,6 +327,8 @@ fn is_vis_invalid(vis: &str) -> bool {
     if vis == "N/A" || vis == "Missing" { return true; }
     if let Some(m) = Regex::new(r">?([\d.]+)").unwrap().captures(vis) {
         if let Ok(n) = m[1].parse::<f64>() {
+            // 0 SM means the parse failed (trailing period -> Rust parse -> 0.0)
+            if n == 0.0 { return true; }
             return n > 10.0 && !vis.starts_with('>');
         }
     }
@@ -343,30 +345,32 @@ fn is_temp_implausible(disp: &str) -> bool {
 }
 
 fn build_wind(result: &wind::WindResult) -> ParsedWind {
-    static DIR_SPD: Lazy<Regex> = Lazy::new(|| Regex::new(r"(\d{3})° at (\d+) kts").unwrap());
-    static GUST:    Lazy<Regex> = Lazy::new(|| Regex::new(r"gusts (\d+) kts").unwrap());
-    static VAR_SPD: Lazy<Regex> = Lazy::new(|| Regex::new(r"Variable at (\d+)").unwrap());
-
     if result.display == "N/A"     { return ParsedWind { raw: Some("N/A".into()),     ..Default::default() }; }
     if result.display == "Missing" { return ParsedWind { raw: Some("Missing".into()), ..Default::default() }; }
-    if result.display == "Calm"    { return ParsedWind { calm: Some(true), raw: Some("Calm".into()), ..Default::default() }; }
+    if result.display == "Calm"    { return ParsedWind { calm: Some(true), raw: Some("Calm".into()), metar: Some("00000KT".into()), ..Default::default() }; }
 
-    if result.display.starts_with("Variable at") {
-        let spd = VAR_SPD.captures(&result.display).and_then(|c| c.get(1)).map(|m| m.as_str().to_string());
+    // Parse structured fields from the METAR string (pure ASCII) rather than the
+    // display string which may contain a degree symbol that gets corrupted in
+    // transit (UTF-8 Â° issue). METAR format: DDDSSGGGKTor DDDSSKT[nnnVnnn]
+    static METAR_DIR_SPD: Lazy<Regex> = Lazy::new(|| Regex::new(r"^(\d{3})(\d{2})(?:G(\d{2}))?KT").unwrap());
+    static METAR_VRB:     Lazy<Regex> = Lazy::new(|| Regex::new(r"^VRB(\d{2})KT").unwrap());
+    static METAR_VAR:     Lazy<Regex> = Lazy::new(|| Regex::new(r"(\d{3})V(\d{3})").unwrap());
+
+    if let Some(caps) = METAR_VRB.captures(&result.metar) {
+        let spd = Some(caps[1].to_string());
         return ParsedWind { variable: Some(true), speed_kt: spd, raw: Some(result.display.clone()), metar: Some(result.metar.clone()), ..Default::default() };
     }
 
-    let direction = DIR_SPD.captures(&result.display).and_then(|c| c.get(1)).map(|m| m.as_str().to_string());
-    let speed     = DIR_SPD.captures(&result.display).and_then(|c| c.get(2)).map(|m| m.as_str().to_string());
-    let gust      = GUST.captures(&result.display).and_then(|c| c.get(1)).map(|m| m.as_str().to_string());
+    if let Some(caps) = METAR_DIR_SPD.captures(&result.metar) {
+        let direction = Some(caps[1].to_string());
+        let speed     = Some(caps[2].to_string());
+        let gust      = caps.get(3).map(|m| m.as_str().to_string());
+        let variable  = if METAR_VAR.is_match(&result.metar) { Some(true) } else { None };
+        return ParsedWind { direction, speed_kt: speed, gust_kt: gust, variable, raw: Some(result.display.clone()), metar: Some(result.metar.clone()), ..Default::default() };
+    }
 
-    // Bug 3 fix: set variable=true when a variable range (NNNvNNN) is present in the
-    // METAR string. wind.rs captures the range into metar/display strings but the
-    // structured field was left None by ..Default::default().
-    static VAR_RANGE_METAR: Lazy<Regex> = Lazy::new(|| Regex::new(r"\d{3}V\d{3}").unwrap());
-    let variable = if VAR_RANGE_METAR.is_match(&result.metar) { Some(true) } else { None };
-
-    ParsedWind { direction, speed_kt: speed, gust_kt: gust, variable, raw: Some(result.display.clone()), metar: Some(result.metar.clone()), ..Default::default() }
+    // Fallback: METAR didn't match expected format
+    ParsedWind { raw: Some(result.display.clone()), metar: Some(result.metar.clone()), ..Default::default() }
 }
 
 fn build_sky(result: &sky::SkyResult) -> Vec<ParsedSky> {
