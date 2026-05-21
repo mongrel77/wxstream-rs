@@ -80,9 +80,12 @@ pub fn audit(transcript: &str, parsed: &ParsedWeather) -> Vec<String> {
     static VIS_KW: Lazy<Regex> = Lazy::new(|| {
         Regex::new(r"\bvisibility\b").unwrap()
     });
+    static VIS_MISSING: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(r"(?i)\bvisibility[\s.,]+(?:missing|information[\s.,]+not[\s.,]+available)\b").unwrap()
+    });
     if VIS_KW.is_match(&t) {
         let vis_na = parsed.visibility_sm.as_deref().unwrap_or("N/A") == "N/A";
-        if vis_na {
+        if vis_na && !VIS_MISSING.is_match(&t) {
             warnings.push("visibility: transcript contains 'visibility' but none was parsed".into());
         }
     }
@@ -96,7 +99,10 @@ pub fn audit(transcript: &str, parsed: &ParsedWeather) -> Vec<String> {
     let sky_na = parsed.sky.is_empty()
         || (parsed.sky.len() == 1 && parsed.sky[0].coverage == "N/A");
 
-    if SKY_KW.is_match(&t) && sky_na {
+    static SKY_MISSING: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(r"(?i)\bsky[\s.,]+condition[\s.,]+(?:missing|information[\s.,]+not[\s.,]+available)\b").unwrap()
+    });
+    if SKY_KW.is_match(&t) && sky_na && !SKY_MISSING.is_match(&t) {
         warnings.push("sky: transcript mentions sky conditions but none were parsed".into());
     }
 
@@ -104,7 +110,7 @@ pub fn audit(transcript: &str, parsed: &ParsedWeather) -> Vec<String> {
     static CEILING_KW: Lazy<Regex> = Lazy::new(|| {
         Regex::new(r"\bceiling\b").unwrap()
     });
-    if CEILING_KW.is_match(&t) && sky_na {
+    if CEILING_KW.is_match(&t) && sky_na && !SKY_MISSING.is_match(&t) {
         warnings.push("sky: transcript mentions ceiling but no ceiling was parsed".into());
     }
 
@@ -114,7 +120,10 @@ pub fn audit(transcript: &str, parsed: &ParsedWeather) -> Vec<String> {
     static TEMP_KW: Lazy<Regex> = Lazy::new(|| {
         Regex::new(r"\btemperature\b").unwrap()
     });
-    if TEMP_KW.is_match(&t) && parsed.temperature_c.is_none() {
+    static TEMP_MISSING: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(r"(?i)\btemperature[\s.,]+(?:missing|information[\s.,]+not[\s.,]+available)\b").unwrap()
+    });
+    if TEMP_KW.is_match(&t) && parsed.temperature_c.is_none() && !TEMP_MISSING.is_match(&t) {
         warnings.push("temperature: transcript mentions temperature but none was parsed".into());
     }
 
@@ -122,7 +131,10 @@ pub fn audit(transcript: &str, parsed: &ParsedWeather) -> Vec<String> {
     static DEWP_KW: Lazy<Regex> = Lazy::new(|| {
         Regex::new(r"\bdewpoint\b|\bdew\s+point\b").unwrap()
     });
-    if DEWP_KW.is_match(&t) && parsed.dewpoint_c.is_none() {
+    static DEWP_MISSING: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(r"(?i)\bdewpoint[\s.,]+(?:missing|information[\s.,]+not[\s.,]+available)\b").unwrap()
+    });
+    if DEWP_KW.is_match(&t) && parsed.dewpoint_c.is_none() && !DEWP_MISSING.is_match(&t) {
         warnings.push("dewpoint: transcript mentions dewpoint but none was parsed".into());
     }
 
@@ -206,7 +218,10 @@ pub fn audit(transcript: &str, parsed: &ParsedWeather) -> Vec<String> {
     static DA_KW: Lazy<Regex> = Lazy::new(|| {
         Regex::new(r"\bdensity\s+alt").unwrap()
     });
-    if DA_KW.is_match(&t) && parsed.density_altitude_ft.is_none() {
+    static DA_MISSING: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(r"(?i)\bdensity[\s.,]+alt(?:itude)?[\s.,]+(?:missing|information[\s.,]+not[\s.,]+available)\b").unwrap()
+    });
+    if DA_KW.is_match(&t) && parsed.density_altitude_ft.is_none() && !DA_MISSING.is_match(&t) {
         warnings.push("density_altitude: transcript mentions density altitude but none was parsed".into());
     }
 

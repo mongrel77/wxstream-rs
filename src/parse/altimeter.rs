@@ -263,12 +263,23 @@ fn phenomena_window(text: &str) -> String {
 
 /// Mirrors extract_phenomena() from parse_transcripts.py.
 pub fn extract_phenomena(text: &str) -> Vec<Phenomenon> {
-    // Run phenomena extraction over both the full text (for phenomena reported
-    // inline with other fields) and the corrected phenomena window (for the
-    // dedicated phenomena slot between altimeter and remarks).
-    let window = phenomena_window(text);
-    // Merge: use window for the corrected slice, full text for anything outside
-    let combined = format!("{} {}", text, window);
+    // Apply Whisper corrections to the full text first, then also run the
+    // phenomena window for additional context. "Miss"/"missed" for "mist" can
+    // appear anywhere in the broadcast (e.g. between visibility and sky condition),
+    // not just in the dedicated phenomena slot between altimeter and remarks.
+    let corrections: &[(&str, &str)] = &[
+        (r"(?i)\bmissed\b", "mist"),
+        (r"(?i)\bmiss\b",   "mist"),
+        (r"(?i)\bhays\b",   "haze"),
+    ];
+    let mut corrected_text = text.to_string();
+    for (pat, rep) in corrections {
+        if let Ok(re) = regex::Regex::new(pat) {
+            corrected_text = re.replace_all(&corrected_text, *rep).to_string();
+        }
+    }
+    let window = phenomena_window(&corrected_text);
+    let combined = format!("{} {}", corrected_text, window);
     let text_lower = combined.to_lowercase();
     let mut found_codes: Vec<String> = Vec::new();
     let mut found: Vec<Phenomenon> = Vec::new();

@@ -353,12 +353,13 @@ fn build_wind(result: &wind::WindResult) -> ParsedWind {
     // display string which may contain a degree symbol that gets corrupted in
     // transit (UTF-8 Â° issue). METAR format: DDDSSGGGKTor DDDSSKT[nnnVnnn]
     static METAR_DIR_SPD: Lazy<Regex> = Lazy::new(|| Regex::new(r"^(\d{3})(\d{2})(?:G(\d{2}))?KT").unwrap());
-    static METAR_VRB:     Lazy<Regex> = Lazy::new(|| Regex::new(r"^VRB(\d{2})KT").unwrap());
+    static METAR_VRB:     Lazy<Regex> = Lazy::new(|| Regex::new(r"^VRB(\d{2})(?:G(\d{2}))?KT").unwrap());
     static METAR_VAR:     Lazy<Regex> = Lazy::new(|| Regex::new(r"(\d{3})V(\d{3})").unwrap());
 
     if let Some(caps) = METAR_VRB.captures(&result.metar) {
-        let spd = Some(caps[1].to_string());
-        return ParsedWind { variable: Some(true), speed_kt: spd, raw: Some(result.display.clone()), metar: Some(result.metar.clone()), ..Default::default() };
+        let spd  = Some(caps[1].to_string());
+        let gust = caps.get(2).map(|m| m.as_str().to_string());
+        return ParsedWind { variable: Some(true), speed_kt: spd, gust_kt: gust, raw: Some(result.display.clone()), metar: Some(result.metar.clone()), ..Default::default() };
     }
 
     if let Some(caps) = METAR_DIR_SPD.captures(&result.metar) {

@@ -30,19 +30,29 @@ pub fn extract_wind(text: &str, full_text: &str) -> WindResult {
 
     // Variable with speed: 'wind variable at N'
     static VAR_SPD: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"(?i)\bwind[\s.,]+variable[\s.,]+(?:at[\s.,]+)?(\d+)").unwrap()
+        Regex::new(r"(?i)\bwind[\s.,]+(?:estimated[\s.,]+)?variable[\s.,]+(?:at[\s.,]+)?(\d+)").unwrap()
     });
     if let Some(m) = VAR_SPD.captures(text) {
         let spd = m[1].parse::<u32>().unwrap_or(0);
+        // Check for peak gusts following a variable wind report
+        static VAR_PEAK_GUST: Lazy<Regex> = Lazy::new(|| {
+            Regex::new(r"(?i)\bpeak[\s.,]+gusts?[\s.,]+(\d+)").unwrap()
+        });
+        let (gust_part, gust_metar) = if let Some(gm) = VAR_PEAK_GUST.captures(ft) {
+            let g = gm[1].parse::<u32>().unwrap_or(0);
+            (format!(", gusts {} kts", g), format!("G{:02}", g))
+        } else {
+            (String::new(), String::new())
+        };
         return WindResult {
-            display: format!("Variable at {} kts", spd),
-            metar:   format!("VRB{:02}KT", spd),
+            display: format!("Variable at {} kts{}", spd, gust_part),
+            metar:   format!("VRB{:02}{}KT", spd, gust_metar),
         };
     }
 
     // Directional wind: 'wind DDD at NNN'
     static DIR_WIND: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"(?i)\bwind[\s.,]+(\d{1,3})[\s.,]+(?:at[\s.,]+)?(\d+)").unwrap()
+        Regex::new(r"(?i)\bwind[\s.,]+(?:estimated[\s.,]+)?(\d{1,3})[\s.,]+(?:at[\s.,]+)?(\d+)").unwrap()
     });
     if let Some(m) = DIR_WIND.captures(text) {
         let dir = m[1].parse::<u32>().unwrap_or(0);
@@ -52,7 +62,7 @@ pub fn extract_wind(text: &str, full_text: &str) -> WindResult {
 
         // Check for gusts
         let gust_pat = format!(
-            r"(?i)\bwind[\s.,]+{}[\s.,]+(?:at[\s.,]+)?\d+[\s.,]+gusts?[\s.,]+(\d+)",
+            r"(?i)\bwind[\s.,]+(?:estimated[\s.,]+)?{}[\s.,]+(?:at[\s.,]+)?\d+[\s.,]+gusts?[\s.,]+(\d+)",
             dir_s
         );
         let gust_part;

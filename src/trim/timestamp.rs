@@ -88,7 +88,6 @@ fn station_name_start(
     }
 
     // Skip direction words that are remark tail words
-    #[allow(unused_assignments)]
     let mut just_skipped_direction = false;
     while station_start < trigger_idx {
         let w = word_clean(&words[station_start].word);
@@ -155,6 +154,7 @@ fn has_clean_start(
 
 /// Find one complete broadcast loop from word-level timestamps.
 /// Mirrors find_loop_from_timestamps() from audio_trim.py.
+#[allow(unused_assignments)]
 pub fn find_loop_from_timestamps(
     words: &[WordTimestamp],
     obs_time: Option<&str>,

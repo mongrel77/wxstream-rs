@@ -83,13 +83,37 @@ pub fn normalize(text: &str) -> String {
         caps[0].replace(' ', "")
     }).to_string();
 
+    // Break sentence-boundary periods between a digit and the next token:
+    // "10. Eight" -> "10 Eight", but "10.8" stays "10.8" (no space = decimal)
+    // This prevents "Visibility 10. 8 thousand" from fusing into "108000".
+    static SENT_BOUNDARY: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?<![23])(\d)\.( )").unwrap());
+    t = SENT_BOUNDARY.replace_all(&t, "$1 ").to_string();
+
     // Period-separated digits: '3. 0. 2. 5.' -> '3025.'
+    // (now safe because sentence-boundary periods were converted to spaces above)
     for _ in 0..6 {
         static PERIOD_DIGITS: Lazy<Regex> = Lazy::new(|| Regex::new(r"(\d)\.\s*(\d)").unwrap());
         let t2 = PERIOD_DIGITS.replace_all(&t, "$1$2").to_string();
         if t2 == t { break; }
         t = t2;
     }
+
+    // Visibility-specific fix: "visibility, 1, 0" or "visibility 1 0" should always
+    // become "visibility 10" — after visibility the first two tokens are always the
+    // SM value, never the start of a sky altitude (which begins with a letter).
+    // Also strips the trailing comma/separator after the value so that subsequent
+    // comma-collapse does not fuse the visibility with the next sky altitude token
+    // e.g. "visibility, 10, 5, thousand" -> "visibility 10 5, thousand" (not 105000).
+    static VIS_ONE_ZERO: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(r"(?i)(visibility[\s.,]+)(1)[\s,]+(0)[\s,]+").unwrap()
+    });
+    t = VIS_ONE_ZERO.replace_all(&t, "${1}10 ").to_string();
+
+    // Also handle "visibility, 10," (already collapsed) — strip trailing comma
+    static VIS_TRAIL_COMMA: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(r"(?i)(visibility[\s.,]+\d+),\s*").unwrap()
+    });
+    t = VIS_TRAIL_COMMA.replace_all(&t, "$1 ").to_string();
 
     // Comma-collapse patterns - join comma-separated single digits into one number
     // e.g. "3, 0, 0, 5" -> "3005", "3, 0, 0, 4" -> "3004"
