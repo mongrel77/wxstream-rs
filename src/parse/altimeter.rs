@@ -38,12 +38,18 @@ pub fn extract_altimeter(text: &str) -> AltResult {
         return AltResult { display: "Missing".into(), metar: "AMIS".into() };
     }
 
+    // Match altimeter value, handling Whisper splitting across a sentence boundary:
+    // "altimeter two niner. Eight six" -> after normalize -> "altimeter 29. 86"
+    // The optional second group captures a 2-digit continuation after a period/space.
     static ALT_RE: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"(?i)altimeter[\s.,]+(\d+(?:\.\d+)?)").unwrap()
+        Regex::new(r"(?i)altimeter[\s.,]+(\d+(?:\.\d+)?)(?:[.\s]+(\d{2}))?").unwrap()
     });
 
     for caps in ALT_RE.captures_iter(text) {
-        let raw = caps[1].replace('.', "");
+        // Combine both groups (handles split "29. 86" -> "2986")
+        let part1 = caps[1].replace('.', "");
+        let part2 = caps.get(2).map(|m| m.as_str()).unwrap_or("").to_string();
+        let raw = format!("{}{}", part1, part2);
         let mut val = raw.clone();
 
         // Truncate to 4 digits if starts with 2 or 3

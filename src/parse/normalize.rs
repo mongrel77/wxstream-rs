@@ -86,7 +86,7 @@ pub fn normalize(text: &str) -> String {
     // Break sentence-boundary periods between a digit and the next token:
     // "10. Eight" -> "10 Eight", but "10.8" stays "10.8" (no space = decimal)
     // This prevents "Visibility 10. 8 thousand" from fusing into "108000".
-    static SENT_BOUNDARY: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?<![23])(\d)\.( )").unwrap());
+    static SENT_BOUNDARY: Lazy<Regex> = Lazy::new(|| Regex::new(r"(\d)\.( )").unwrap());
     t = SENT_BOUNDARY.replace_all(&t, "$1 ").to_string();
 
     // Period-separated digits: '3. 0. 2. 5.' -> '3025.'
