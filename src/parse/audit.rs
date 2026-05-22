@@ -189,10 +189,10 @@ pub fn audit(transcript: &str, parsed: &ParsedWeather) -> Vec<String> {
     if FOG.is_match(&t) && !phenomena_codes.iter().any(|c| c.contains("FG") || c.contains("FZFG")) {
         warnings.push("phenomena: transcript mentions fog but FG not in phenomena".into());
     }
-    if HAZE.is_match(&t) && !phenomena_codes.iter().any(|c| *c == "HZ") {
+    if HAZE.is_match(&t) && !phenomena_codes.iter().any(|c| c.contains("HZ")) {
         warnings.push("phenomena: transcript mentions haze but HZ not in phenomena".into());
     }
-    if MIST.is_match(&t) && !phenomena_codes.iter().any(|c| *c == "BR") {
+    if MIST.is_match(&t) && !phenomena_codes.iter().any(|c| c.contains("BR")) {
         warnings.push("phenomena: transcript mentions mist but BR not in phenomena".into());
     }
     if THDR.is_match(&t) && !THDR_INFO.is_match(&t)

@@ -203,9 +203,14 @@ pub fn parse(input: &ParseInput) -> ParsedWeather {
 
     // Temperature / Dewpoint
     let mut temp_result = extract_temp_dp(&norm);
-    if is_temp_implausible(&temp_result.display) {
+    // Fall back to norm_full if temp is implausible OR if dewpoint is missing
+    // (last loop may have temp but not dewpoint due to Whisper truncation)
+    let temp_missing_dp = temp_result.display.ends_with("/ N/A") || temp_result.display.ends_with("/ Missing");
+    if is_temp_implausible(&temp_result.display) || temp_missing_dp {
         let full_temp = extract_temp_dp(&norm_full);
-        if !is_temp_implausible(&full_temp.display) { temp_result = full_temp; }
+        if !is_temp_implausible(&full_temp.display) && !full_temp.display.ends_with("/ N/A") {
+            temp_result = full_temp;
+        }
     }
     // Majority vote: correct outlier last loops (e.g. KFWB: 2 loops 17°C, last loop 18°C).
     // Strict majority required so genuine station updates between loops are preserved.
@@ -261,7 +266,12 @@ pub fn parse(input: &ParseInput) -> ParsedWeather {
     metar_parts.push("RMK AO2".to_string());
     let metar_str = metar_parts.join(" ");
 
-    let density_altitude = extract_density_altitude(&remarks);
+    // Extract density altitude from the selected loop's remarks first,
+    // then fall back to norm_full in case it was truncated in the selected loop.
+    let density_altitude = extract_density_altitude(&remarks).or_else(|| {
+        let full_remarks = extract_remarks(&norm_full);
+        extract_density_altitude(&full_remarks)
+    });
     let wind_parsed      = build_wind(&wind_result);
     let sky_parsed       = build_sky(&sky_result);
     let local_info       = extract_local_info(input.raw_transcript);

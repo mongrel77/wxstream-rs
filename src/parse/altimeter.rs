@@ -38,30 +38,36 @@ pub fn extract_altimeter(text: &str) -> AltResult {
         return AltResult { display: "Missing".into(), metar: "AMIS".into() };
     }
 
-    // Match altimeter value, handling Whisper splitting across a sentence boundary:
-    // "altimeter two niner. Eight six" -> after normalize -> "altimeter 29. 86"
-    // The optional second group captures a 2-digit continuation after a period/space.
-    static ALT_RE: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"(?i)altimeter[\s.,]+(\d+(?:\.\d+)?)(?:[.\s]+(\d{2}))?").unwrap()
+    // Extract altimeter value by collecting all digits between "altimeter" and "remarks"
+    // (or end of string). This handles Whisper splitting the value across sentence
+    // boundaries e.g. "altimeter two niner niner. Six remarks" -> "299 6 remarks"
+    // -> digits "2996" -> 29.96 inHg.
+    static ALT_WINDOW: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(r"(?i)altimeter[\s.,]+(.*?)(?:\bremarks\b|$)").unwrap()
+    });
+    static DIGITS_ONLY: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(r"\d+").unwrap()
     });
 
-    for caps in ALT_RE.captures_iter(text) {
-        // Combine both groups (handles split "29. 86" -> "2986")
-        let part1 = caps[1].replace('.', "");
-        let part2 = caps.get(2).map(|m| m.as_str()).unwrap_or("").to_string();
-        let raw = format!("{}{}", part1, part2);
-        let mut val = raw.clone();
+    if let Some(caps) = ALT_WINDOW.captures(text) {
+        let window = &caps[1];
+        // Collect all digit runs in the window and join them
+        let raw: String = DIGITS_ONLY.find_iter(window)
+            .map(|m| m.as_str())
+            .collect();
 
-        // Truncate to 4 digits if starts with 2 or 3
-        if val.len() > 4 && (val.starts_with('2') || val.starts_with('3')) {
-            val = val[..4].to_string();
-        }
-
-        if val.len() == 4 && (val.starts_with('2') || val.starts_with('3')) {
-            let display = format!("{}{}.{}{} inHg",
-                &val[..1], &val[1..2], &val[2..3], &val[3..4]);
-            let metar = format!("A{}", val);
-            return AltResult { display, metar };
+        if !raw.is_empty() {
+            // Truncate to 4 digits starting from the first 2/3 digit
+            let mut val = raw.clone();
+            if val.len() > 4 && (val.starts_with('2') || val.starts_with('3')) {
+                val = val[..4].to_string();
+            }
+            if val.len() == 4 && (val.starts_with('2') || val.starts_with('3')) {
+                let display = format!("{}{}.{}{} inHg",
+                    &val[..1], &val[1..2], &val[2..3], &val[3..4]);
+                let metar = format!("A{}", val);
+                return AltResult { display, metar };
+            }
         }
     }
 
@@ -181,7 +187,7 @@ pub struct Phenomenon {
 
 const PHENOMENA: &[(&str, &str, &str)] = &[
     // Thunderstorm: exclude "thunderstorm information not available" - matched by TSNO separately
-    ("Thunderstorm",     "TS",   r"(?i)\bthunderstorm(?:\s+(?:and|with|in|near|overhead)\b|\s*[,.]|\s*$)"),
+    ("Thunderstorm",     "TS",   r"(?i)\bthunderstorm(?:\s+(?:and|with|in|near|overhead|rain|drizzle|snow|mist|fog|haze|vicinity)\b|\s*[,.]|\s*$)"),
     ("Freezing Rain",    "FZRA", r"(?i)\bfreezing\s+rain\b"),
     ("Freezing Drizzle", "FZDZ", r"(?i)\bfreezing\s+drizzle\b"),
     ("Freezing Fog",     "FZFG", r"(?i)\bfreezing\s+fog\b"),
@@ -293,16 +299,21 @@ pub fn extract_phenomena(text: &str) -> Vec<Phenomenon> {
     for (display, code, pattern) in PHENOMENA {
         if let Ok(re) = Regex::new(pattern) {
             if let Some(m) = re.find(&text_lower) {
-                // Check intensity prefix
-                let pre_start = m.start().saturating_sub(20);
-                let pre = &text_lower[pre_start..m.start()];
+                // Check intensity prefix — look only at the single word immediately
+                // preceding the matched phenomenon. This avoids grabbing a prefix
+                // from a different phenomenon earlier in the broadcast.
+                // Split on whitespace AND punctuation to get the last pure word,
+                // handling cases like "vicinity.Light" where no space precedes "Light".
+                let preceding_word = text_lower[..m.start()]
+                    .split(|c: char| !c.is_alphabetic())
+                    .filter(|s| !s.is_empty())
+                    .last()
+                    .unwrap_or("");
 
-                let (intensity, disp_prefix) = if Regex::new(r"\bheavy\b").unwrap().is_match(pre) {
-                    ("+", "Heavy ")
-                } else if Regex::new(r"\blight\b").unwrap().is_match(pre) {
-                    ("-", "Light ")
-                } else {
-                    ("", "")
+                let (intensity, disp_prefix) = match preceding_word {
+                    "heavy" => ("+", "Heavy "),
+                    "light" => ("-", "Light "),
+                    _ => ("", ""),
                 };
 
                 let full_code = format!("{}{}", intensity, code);

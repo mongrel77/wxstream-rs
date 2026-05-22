@@ -25,6 +25,11 @@ pub fn normalize(text: &str) -> String {
     static ZULU_FUSE: Lazy<Regex> = Lazy::new(|| Regex::new(r"([Zz]ulu)([A-Za-z])").unwrap());
     t = ZULU_FUSE.replace_all(&t, "$1 $2").to_string();
 
+    // Separate digit.Zulu (no space) so the time digits can be collapsed
+    // e.g. "1 8 3 5.Zulu" -> "1 8 3 5. Zulu" -> SENT_BOUNDARY -> "1 8 3 5 Zulu"
+    static DIGIT_DOT_ZULU: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)(\d)\.([Zz]ulu)").unwrap());
+    t = DIGIT_DOT_ZULU.replace_all(&t, "$1. $2").to_string();
+
     for kw in &["Wind", "Visibility", "Sky", "Temperature", "Dewpoint", "Altimeter", "Remarks"] {
         let pat = format!(r"([a-z])({})\b", kw);
         let re  = Regex::new(&pat).unwrap();
@@ -59,6 +64,11 @@ pub fn normalize(text: &str) -> String {
     t = EIGHTH.replace_all(&t, "8").to_string();
     t = NINTH.replace_all(&t, "9").to_string();
 
+    // Whisper mis-transcriptions of wind-related terms
+    // "heat gusts" is always a mishearing of "peak gusts" in AWOS context
+    static HEAT_GUSTS: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)\bheat\s+gusts?\b").unwrap());
+    t = HEAT_GUSTS.replace_all(&t, "Peak Gusts").to_string();
+
     // Spoken tens
     static TWENTY: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)\btwenty\b").unwrap());
     static THIRTY: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)\bthirty\b").unwrap());
@@ -83,6 +93,13 @@ pub fn normalize(text: &str) -> String {
         caps[0].replace(' ', "")
     }).to_string();
 
+    // Insert space between digit and immediately-following sky coverage word (no space)
+    // e.g. "2800.Scattered" -> "2800. Scattered" so SENT_BOUNDARY can then break it
+    static SKY_FUSE: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(r"(?i)(\d)\.(scattered|broken|overcast|few|clear|clr|skc|ovc|bkn|sct|few)\b").unwrap()
+    });
+    t = SKY_FUSE.replace_all(&t, "$1. $2").to_string();
+
     // Break sentence-boundary periods between a digit and the next token:
     // "10. Eight" -> "10 Eight", but "10.8" stays "10.8" (no space = decimal)
     // This prevents "Visibility 10. 8 thousand" from fusing into "108000".
@@ -105,13 +122,13 @@ pub fn normalize(text: &str) -> String {
     // comma-collapse does not fuse the visibility with the next sky altitude token
     // e.g. "visibility, 10, 5, thousand" -> "visibility 10 5, thousand" (not 105000).
     static VIS_ONE_ZERO: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"(?i)(visibility[\s.,]+)(1)[\s,]+(0)[\s,]+").unwrap()
+        Regex::new(r"(?i)(visibility[\s.,]+)(1)[\s,]+(0)[\s,.,]+").unwrap()
     });
     t = VIS_ONE_ZERO.replace_all(&t, "${1}10 ").to_string();
 
-    // Also handle "visibility, 10," (already collapsed) — strip trailing comma
+    // Also handle "visibility, 10," (already collapsed) — strip trailing comma/period
     static VIS_TRAIL_COMMA: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"(?i)(visibility[\s.,]+\d+),\s*").unwrap()
+        Regex::new(r"(?i)(visibility[\s.,]+\d+)[,.]\s*").unwrap()
     });
     t = VIS_TRAIL_COMMA.replace_all(&t, "$1 ").to_string();
 
@@ -173,6 +190,12 @@ pub fn normalize(text: &str) -> String {
         let b: i64 = caps[2].parse().unwrap_or(0);
         (a * 1000 + b * 100).to_string()
     }).to_string();
+
+    // Second SKY_FUSE pass: runs after thousand/hundred conversion so that
+    // "8000. Scattered" (produced after "eight thousand. Scattered" normalizes)
+    // gets separated into "8000 Scattered" for sky pattern matching.
+    // (First pass handles pre-conversion fused tokens like "2800.Scattered")
+    t = SKY_FUSE.replace_all(&t, "$1. $2").to_string();
 
     // Thousands-separator variants
     static THOU_SEP_COMMA: Lazy<Regex> = Lazy::new(|| Regex::new(r"\b(\d{1,2}),\s*000\b").unwrap());

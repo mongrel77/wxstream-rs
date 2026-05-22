@@ -21,6 +21,10 @@ pub struct SkyResult {
 /// Extract sky conditions. Mirrors extract_sky() from parse_transcripts.py.
 pub fn extract_sky(text: &str) -> SkyResult {
     let mut seen_alts: HashMap<u32, (String, String)> = HashMap::new();
+    // Track altitudes claimed by direct "coverage altitude" patterns (e.g. "few 1000").
+    // ALT_* reverse patterns ("1000 scattered") must not override these — the direct
+    // pattern is more reliable since it unambiguously associates coverage with altitude.
+    let mut direct_alts: std::collections::HashSet<u32> = std::collections::HashSet::new();
 
     let priority = |code: &str| -> u8 {
         match &code[..3] {
@@ -28,16 +32,19 @@ pub fn extract_sky(text: &str) -> SkyResult {
         }
     };
 
-    let mut add = |alt_str: &str, cover: &str| {
+    let mut add_layer = |alt_str: &str, cover: &str, direct: bool| {
         let alt_clean: String = alt_str.chars().filter(|c| c.is_ascii_digit()).collect();
         if let Ok(alt) = alt_clean.parse::<u32>() {
             if cover != "VV" && alt < 100 && alt != 0 { return; }
             if alt > 99900 { return; }
+            // Skip reverse-pattern matches for altitudes already claimed by direct patterns
+            if !direct && direct_alts.contains(&alt) { return; }
             let metar = format!("{}{:03}", cover, alt / 100);
             let disp  = format!("{} {} ft", cover, format_thousands(alt));
             let existing = seen_alts.get(&alt);
             if existing.is_none() || priority(cover) > priority(&existing.unwrap().0) {
                 seen_alts.insert(alt, (metar, disp));
+                if direct { direct_alts.insert(alt); }
             }
         }
     };
@@ -50,69 +57,69 @@ pub fn extract_sky(text: &str) -> SkyResult {
         let base: u32 = m[1].parse().unwrap_or(0);
         let extra: u32 = m[2].parse().unwrap_or(0);
         let alt = base + extra * 100;
-        add(&alt.to_string(), "BKN");
+        add_layer(&alt.to_string(), "BKN", true);
     }
 
     // Overcast patterns
     static OVC_CEILING: Lazy<Regex> = Lazy::new(|| {
         Regex::new(r"(?i)ceiling[\s.,]+(\d[\d,]+)[\s.,]+overcast").unwrap()
     });
-    for m in OVC_CEILING.captures_iter(text) { add(&m[1], "OVC"); }
+    for m in OVC_CEILING.captures_iter(text) { add_layer(&m[1], "OVC", true); }
 
     static OVC_AT: Lazy<Regex> = Lazy::new(|| {
         Regex::new(r"(?i)(?:sky\s+condition\s+)?overcast[\s.,]+(?:at\s+)?(\d[\d,]+)").unwrap()
     });
-    for m in OVC_AT.captures_iter(text) { add(&m[1], "OVC"); }
+    for m in OVC_AT.captures_iter(text) { add_layer(&m[1], "OVC", true); }
 
     // Broken patterns
     static BKN_CEILING: Lazy<Regex> = Lazy::new(|| {
         Regex::new(r"(?i)ceiling[\s.,]+(\d[\d,]+)[\s.,]+broken").unwrap()
     });
-    for m in BKN_CEILING.captures_iter(text) { add(&m[1], "BKN"); }
+    for m in BKN_CEILING.captures_iter(text) { add_layer(&m[1], "BKN", true); }
 
     static BKN_AFTER: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"(?i)(\d[\d,]+)\s+broken").unwrap()
+        Regex::new(r"(?i)(\d[\d,]+)[\s.,]+broken").unwrap()
     });
-    for m in BKN_AFTER.captures_iter(text) { add(&m[1], "BKN"); }
+    for m in BKN_AFTER.captures_iter(text) { add_layer(&m[1], "BKN", true); }
 
     static BKN_AT: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"(?i)broken\s+(?:at\s+)?(\d[\d,]+)").unwrap()
+        Regex::new(r"(?i)broken[\s.,]+(?:at[\s.,]+)?(\d[\d,]+)").unwrap()
     });
-    for m in BKN_AT.captures_iter(text) { add(&m[1], "BKN"); }
+    for m in BKN_AT.captures_iter(text) { add_layer(&m[1], "BKN", true); }
 
     // Scattered patterns
     static SCT_CEILING: Lazy<Regex> = Lazy::new(|| {
         Regex::new(r"(?i)ceiling[\s.,]+(\d[\d,]+)[\s.,]+scattered").unwrap()
     });
-    for m in SCT_CEILING.captures_iter(text) { add(&m[1], "SCT"); }
+    for m in SCT_CEILING.captures_iter(text) { add_layer(&m[1], "SCT", true); }
 
     static SCT_AT: Lazy<Regex> = Lazy::new(|| {
         Regex::new(r"(?i)scattered[\s.,]+(?:at\s+)?(\d[\d,]+)").unwrap()
     });
-    for m in SCT_AT.captures_iter(text) { add(&m[1], "SCT"); }
+    for m in SCT_AT.captures_iter(text) { add_layer(&m[1], "SCT", true); }
 
     static ALT_SCT: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"(?i)(\d[\d,]+)[\s.,]+scattered").unwrap()
+        Regex::new(r"(?i)(\d[\d,]+)(?:[ \t,]+|\.)scattered").unwrap()
     });
-    for m in ALT_SCT.captures_iter(text) { add(&m[1], "SCT"); }
+    for m in ALT_SCT.captures_iter(text) { add_layer(&m[1], "SCT", false); }
 
     // Few patterns
     // "few clouds at 600" — the word "clouds" is optional between "few" and the altitude
     static FEW_AT: Lazy<Regex> = Lazy::new(|| {
         Regex::new(r"(?i)few[\s.,]+(?:clouds?\s+)?(?:at\s+)?(\d[\d,]+)").unwrap()
     });
-    for m in FEW_AT.captures_iter(text) { add(&m[1], "FEW"); }
+    for m in FEW_AT.captures_iter(text) { add_layer(&m[1], "FEW", true); }
 
     static ALT_FEW: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"(?i)(\d[\d,]+)[\s.,]+few").unwrap()
+        Regex::new(r"(?i)(\d[\d,]+)(?:[ \t,]+|\.)few").unwrap()
     });
-    for m in ALT_FEW.captures_iter(text) { add(&m[1], "FEW"); }
+    for m in ALT_FEW.captures_iter(text) { add_layer(&m[1], "FEW", false); }
 
     // Vertical visibility
     static VV: Lazy<Regex> = Lazy::new(|| {
         Regex::new(r"(?i)vertical\s+visibility[\s.,]+(\d[\d,]+)").unwrap()
     });
-    for m in VV.captures_iter(text) { add(&m[1], "VV"); }
+    for m in VV.captures_iter(text) { add_layer(&m[1], "VV", true); }
 
     // Build output if any layers found
     if !seen_alts.is_empty() {
