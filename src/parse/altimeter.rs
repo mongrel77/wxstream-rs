@@ -49,26 +49,33 @@ pub fn extract_altimeter(text: &str) -> AltResult {
         Regex::new(r"\d+").unwrap()
     });
 
-    if let Some(caps) = ALT_WINDOW.captures(text) {
+    // Try all altimeter matches in order, return the first valid one.
+    // This handles corrupted loops where an invalid value appears before a valid one.
+    for caps in ALT_WINDOW.captures_iter(text) {
         let window = &caps[1];
-        // Collect all digit runs in the window and join them
         let raw: String = DIGITS_ONLY.find_iter(window)
             .map(|m| m.as_str())
             .collect();
 
-        if !raw.is_empty() {
-            // Truncate to 4 digits starting from the first 2/3 digit
-            let mut val = raw.clone();
-            if val.len() > 4 && (val.starts_with('2') || val.starts_with('3')) {
-                val = val[..4].to_string();
-            }
-            if val.len() == 4 && (val.starts_with('2') || val.starts_with('3')) {
-                let display = format!("{}{}.{}{} inHg",
-                    &val[..1], &val[1..2], &val[2..3], &val[3..4]);
-                let metar = format!("A{}", val);
-                return AltResult { display, metar };
-            }
+        if raw.is_empty() { continue; }
+
+        let mut val = raw.clone();
+        if val.len() > 4 && (val.starts_with('2') || val.starts_with('3')) {
+            val = val[..4].to_string();
         }
+        if val.len() != 4 { continue; }
+        if !val.starts_with('2') && !val.starts_with('3') { continue; }
+
+        // Validate range: 27.50 - 32.00 inHg
+        let num_str = format!("{}.{}", &val[..2], &val[2..]);
+        if let Ok(n) = num_str.parse::<f64>() {
+            if n < 27.50 || n > 32.00 { continue; }
+        }
+
+        let display = format!("{}{}.{}{} inHg",
+            &val[..1], &val[1..2], &val[2..3], &val[3..4]);
+        let metar = format!("A{}", val);
+        return AltResult { display, metar };
     }
 
     AltResult { display: "N/A".into(), metar: "N/A".into() }

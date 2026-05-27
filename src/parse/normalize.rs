@@ -100,6 +100,11 @@ pub fn normalize(text: &str) -> String {
     });
     t = SKY_FUSE.replace_all(&t, "$1. $2").to_string();
 
+    // Strip isolated periods surrounded by spaces: "10 . 2800" -> "10 2800"
+    // These occur when Whisper inserts a period with spaces on both sides
+    static ISOLATED_PERIOD: Lazy<Regex> = Lazy::new(|| Regex::new(r" \. ").unwrap());
+    t = ISOLATED_PERIOD.replace_all(&t, " ").to_string();
+
     // Break sentence-boundary periods between a digit and the next token:
     // "10. Eight" -> "10 Eight", but "10.8" stays "10.8" (no space = decimal)
     // This prevents "Visibility 10. 8 thousand" from fusing into "108000".
