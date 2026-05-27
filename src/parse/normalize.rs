@@ -111,6 +111,14 @@ pub fn normalize(text: &str) -> String {
     static SENT_BOUNDARY: Lazy<Regex> = Lazy::new(|| Regex::new(r"(\d)\.( )").unwrap());
     t = SENT_BOUNDARY.replace_all(&t, "$1 ").to_string();
 
+    // Protect visibility value from period-digit fusion before period collapse runs.
+    // "Visibility 10.2 thousand" -> "Visibility 10 2 thousand" so that period-digit
+    // collapse doesn't fuse the vis value with the following sky altitude digit.
+    static VIS_PROTECT: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(r"(?i)(visibility[\s.,]+\d+)\.").unwrap()
+    });
+    t = VIS_PROTECT.replace_all(&t, "$1 ").to_string();
+
     // Period-separated digits: '3. 0. 2. 5.' -> '3025.'
     // (now safe because sentence-boundary periods were converted to spaces above)
     for _ in 0..6 {

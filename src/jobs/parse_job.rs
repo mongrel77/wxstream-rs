@@ -89,6 +89,10 @@ pub async fn run(
                             .map(|s| SkyCondition { coverage: s.coverage, height_ft: s.height_ft })
                             .collect();
 
+                        // Determine quality status before building entry
+                        let needs_quality = !parsed.audit_warnings.is_empty()
+                            || !parsed.validation_warnings.is_empty();
+
                         let now = chrono::Utc::now();
                         let metar = MetarEntry {
                             id:                  None,
@@ -109,7 +113,7 @@ pub async fn run(
                             metar:               parsed.metar,
                             selected_loop_time:  parsed.selected_loop_time,
                             local_info:          parsed.local_info,
-                            quality_status:      QualityStatus::Pending,
+                            quality_status:      if needs_quality { QualityStatus::Pending } else { QualityStatus::Validated },
                             quality:             None,
                             validation_warnings: parsed.validation_warnings,
                             audit_warnings:      parsed.audit_warnings,
@@ -122,10 +126,6 @@ pub async fn run(
                             let _ = db.fail_job(job_id, &e.to_string()).await;
                             return;
                         }
-
-                        // Only create a quality job if there are warnings
-                        let needs_quality = !metar.audit_warnings.is_empty()
-                            || !metar.validation_warnings.is_empty();
 
                         if needs_quality {
                             let quality_job = ProcessingJob::new(
