@@ -9,8 +9,11 @@ use regex::Regex;
 
 use crate::parse::ParsedWeather;
 
-pub fn audit(transcript: &str, parsed: &ParsedWeather) -> Vec<String> {
-    let t = transcript.to_lowercase();
+pub fn audit(norm: &str, norm_full: &str, parsed: &ParsedWeather) -> Vec<String> {
+    // Use norm_full for null-field checks (parser falls back across all loops)
+    // Use norm for phenomena checks (parser only extracts from selected loop)
+    let t = norm_full.to_lowercase();
+    let t_norm = norm.to_lowercase();
     let mut warnings: Vec<String> = Vec::new();
 
     // -----------------------------------------------------------------------
@@ -169,10 +172,12 @@ pub fn audit(transcript: &str, parsed: &ParsedWeather) -> Vec<String> {
     static HAIL:    Lazy<Regex> = Lazy::new(|| Regex::new(r"\bhail\b").unwrap());
     static FREEZING: Lazy<Regex> = Lazy::new(|| Regex::new(r"\bfreezing\b").unwrap());
 
+    // Phenomena checks use t_norm (selected loop only) — phenomena from earlier
+    // loops that no longer apply in the most recent broadcast are not flagged.
     let phenomena_codes: Vec<&str> = parsed.phenomena.iter().map(|s| s.as_str()).collect();
 
     let _check_phenomenon = |re: &Regex, codes: &[&str], label: &str, warnings: &mut Vec<String>| {
-        if re.is_match(&t) && !codes.iter().any(|c| c.contains(label)) {
+        if re.is_match(&t_norm) && !codes.iter().any(|c| c.contains(label)) {
             warnings.push(format!(
                 "phenomena: transcript mentions {} but it was not captured in phenomena",
                 label
@@ -180,33 +185,33 @@ pub fn audit(transcript: &str, parsed: &ParsedWeather) -> Vec<String> {
         }
     };
 
-    if RAIN.is_match(&t) && !phenomena_codes.iter().any(|c| c.contains("RA") || c.contains("FZRA")) {
+    if RAIN.is_match(&t_norm) && !phenomena_codes.iter().any(|c| c.contains("RA") || c.contains("FZRA")) {
         warnings.push("phenomena: transcript mentions rain but RA not in phenomena".into());
     }
-    if SNOW.is_match(&t) && !phenomena_codes.iter().any(|c| c.contains("SN") || c.contains("SG") || c.contains("BLSN")) {
+    if SNOW.is_match(&t_norm) && !phenomena_codes.iter().any(|c| c.contains("SN") || c.contains("SG") || c.contains("BLSN")) {
         warnings.push("phenomena: transcript mentions snow but SN not in phenomena".into());
     }
-    if FOG.is_match(&t) && !phenomena_codes.iter().any(|c| c.contains("FG") || c.contains("FZFG")) {
+    if FOG.is_match(&t_norm) && !phenomena_codes.iter().any(|c| c.contains("FG") || c.contains("FZFG")) {
         warnings.push("phenomena: transcript mentions fog but FG not in phenomena".into());
     }
-    if HAZE.is_match(&t) && !phenomena_codes.iter().any(|c| c.contains("HZ")) {
+    if HAZE.is_match(&t_norm) && !phenomena_codes.iter().any(|c| c.contains("HZ")) {
         warnings.push("phenomena: transcript mentions haze but HZ not in phenomena".into());
     }
-    if MIST.is_match(&t) && !phenomena_codes.iter().any(|c| c.contains("BR")) {
+    if MIST.is_match(&t_norm) && !phenomena_codes.iter().any(|c| c.contains("BR")) {
         warnings.push("phenomena: transcript mentions mist but BR not in phenomena".into());
     }
-    if THDR.is_match(&t) && !THDR_INFO.is_match(&t)
+    if THDR.is_match(&t_norm) && !THDR_INFO.is_match(&t_norm)
         && !phenomena_codes.iter().any(|c| c.contains("TS"))
     {
         warnings.push("phenomena: transcript mentions thunderstorm but TS not in phenomena".into());
     }
-    if DRIZZLE.is_match(&t) && !phenomena_codes.iter().any(|c| c.contains("DZ")) {
+    if DRIZZLE.is_match(&t_norm) && !phenomena_codes.iter().any(|c| c.contains("DZ")) {
         warnings.push("phenomena: transcript mentions drizzle but DZ not in phenomena".into());
     }
-    if HAIL.is_match(&t) && !phenomena_codes.iter().any(|c| c.contains("GR") || c.contains("GS")) {
+    if HAIL.is_match(&t_norm) && !phenomena_codes.iter().any(|c| c.contains("GR") || c.contains("GS")) {
         warnings.push("phenomena: transcript mentions hail but GR not in phenomena".into());
     }
-    if FREEZING.is_match(&t)
+    if FREEZING.is_match(&t_norm)
         && !phenomena_codes.iter().any(|c| c.contains("FZ"))
     {
         warnings.push("phenomena: transcript mentions freezing but no FZ phenomenon captured".into());
@@ -223,6 +228,32 @@ pub fn audit(transcript: &str, parsed: &ParsedWeather) -> Vec<String> {
     });
     if DA_KW.is_match(&t) && parsed.density_altitude_ft.is_none() && !DA_MISSING.is_match(&t) {
         warnings.push("density_altitude: transcript mentions density altitude but none was parsed".into());
+    }
+
+    // -----------------------------------------------------------------------
+    // Hallucination detection
+    // -----------------------------------------------------------------------
+    // Detect phrase-level repetition — a strong signal of Whisper hallucination.
+    // If a wind or sky phrase repeats 3+ times the transcript is likely corrupted.
+    static WIND_PHRASE: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(r"(?i)\bwind\s+\d{3}\s+at\s+\d+").unwrap()
+    });
+    static SKY_PHRASE: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(r"(?i)\bsky\s+condition\b").unwrap()
+    });
+    let wind_count = WIND_PHRASE.find_iter(&t).count();
+    let sky_count  = SKY_PHRASE.find_iter(&t).count();
+    if wind_count >= 4 {
+        warnings.push(format!(
+            "hallucination: wind phrase repeated {} times — transcript likely contains Whisper hallucination",
+            wind_count
+        ));
+    }
+    if sky_count >= 5 {
+        warnings.push(format!(
+            "hallucination: sky condition phrase repeated {} times — transcript likely contains Whisper hallucination",
+            sky_count
+        ));
     }
 
     warnings

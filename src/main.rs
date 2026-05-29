@@ -23,6 +23,8 @@ enum Service {
     Trim,
     /// Runs quality agent on parsed data
     Quality,
+    /// Splits and re-transcribes hallucinated audio
+    Retranscribe,
     /// Runs all services in a single process (default, dev mode)
     All,
 }
@@ -81,7 +83,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Load sites from MongoDB — needed by transcribe, parse, trim
     let sites = match args.service {
-        Service::Scanner | Service::Quality => Arc::new(std::collections::HashMap::new()),
+        Service::Scanner | Service::Quality | Service::Retranscribe => Arc::new(std::collections::HashMap::new()),
         _ => {
             let s = db.load_sites().await?;
             Arc::new(s)
@@ -137,6 +139,14 @@ async fn main() -> anyhow::Result<()> {
             }
         }
 
+        Service::Retranscribe => {
+            tracing::info!("RetranscribeService started");
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {}
+                _ = jobs::retranscribe_job::run(cfg.clone(), db.clone()) => {}
+            }
+        }
+
         Service::All => {
             tracing::info!("All services started (dev mode)");
             tokio::select! {
@@ -157,6 +167,9 @@ async fn main() -> anyhow::Result<()> {
                 }
                 _ = jobs::quality_job::run(cfg.clone(), db.clone()) => {
                     tracing::error!("QualityJob exited unexpectedly");
+                }
+                _ = jobs::retranscribe_job::run(cfg.clone(), db.clone()) => {
+                    tracing::error!("RetranscribeJob exited unexpectedly");
                 }
             }
         }

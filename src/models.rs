@@ -14,6 +14,7 @@ pub enum JobStage {
     Parse,
     Trim,
     Quality,
+    Retranscribe,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -91,6 +92,10 @@ pub struct AudioRecording {
     pub created_at:    Option<bson::Bson>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub updated_at:    Option<bson::Bson>,
+
+    /// Set to true after a retranscribe attempt so we never retry more than once.
+    #[serde(default)]
+    pub retranscribe_attempted: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -108,6 +113,16 @@ pub struct ProcessingJob {
     pub status:             JobStatus,
     pub error:              Option<String>,
 
+    /// Links chunk transcribe jobs back to their retranscribe group.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chunk_group_id:     Option<ObjectId>,
+    /// Index of this chunk within the retranscribe group (0-based).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chunk_index:        Option<u32>,
+    /// Total chunks in the retranscribe group.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chunk_total:        Option<u32>,
+
     #[serde(skip_serializing_if = "Option::is_none")]
     pub created_at:         Option<bson::Bson>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -122,8 +137,11 @@ impl ProcessingJob {
             audio_recording_id,
             site_id,
             stage,
-            status: JobStatus::NotStarted,
-            error:  None,
+            status:         JobStatus::NotStarted,
+            error:          None,
+            chunk_group_id: None,
+            chunk_index:    None,
+            chunk_total:    None,
             created_at: Some(now.clone()),
             updated_at: Some(now),
         }

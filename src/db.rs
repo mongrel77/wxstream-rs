@@ -493,4 +493,201 @@ impl Db {
 
         Ok(())
     }
+
+    // ---------------------------------------------------------------------------
+    // Retranscribe jobs
+    // ---------------------------------------------------------------------------
+
+    /// Atomically marks the audio_recording as retranscribe_attempted and creates
+    /// a retranscribe processing job. Returns Ok(true) if the job was created,
+    /// Ok(false) if retranscription was already attempted (idempotent).
+    pub async fn try_create_retranscribe_job(
+        &self,
+        rec_id:  ObjectId,
+        site_id: String,
+    ) -> Result<bool> {
+        let now = BsonDateTime::from_millis(Utc::now().timestamp_millis());
+
+        // Atomically set retranscribe_attempted=true only if it's currently false/unset
+        let result = self.audio_recordings().update_one(
+            doc! {
+                "_id": rec_id,
+                "$or": [
+                    { "retranscribe_attempted": { "$exists": false } },
+                    { "retranscribe_attempted": false },
+                ]
+            },
+            doc! { "$set": { "retranscribe_attempted": true, "updated_at": now } },
+            None,
+        ).await?;
+
+        if result.modified_count == 0 {
+            return Ok(false); // Already attempted
+        }
+
+        let job = ProcessingJob::new(rec_id, site_id, JobStage::Retranscribe);
+        self.create_job(&job).await?;
+        Ok(true)
+    }
+
+    /// Claim a retranscribe job atomically.
+    pub async fn claim_retranscribe_job(
+        &self,
+    ) -> Result<Option<(ProcessingJob, crate::models::AudioRecording)>> {
+        use mongodb::options::FindOneAndUpdateOptions;
+        use mongodb::options::ReturnDocument;
+
+        let now = BsonDateTime::from_millis(Utc::now().timestamp_millis());
+        let opts = FindOneAndUpdateOptions::builder()
+            .return_document(ReturnDocument::After)
+            .build();
+
+        let job = self.processing_jobs()
+            .find_one_and_update(
+                doc! { "stage": "retranscribe", "status": "not_started" },
+                doc! { "$set": { "status": "pending", "updated_at": now } },
+                opts,
+            )
+            .await
+            .context("claim_retranscribe_job failed")?;
+
+        let Some(job) = job else { return Ok(None) };
+
+        let recording = self.audio_recordings()
+            .find_one(doc! { "_id": job.audio_recording_id }, None)
+            .await?
+            .context("AudioRecording not found for retranscribe job")?;
+
+        Ok(Some((job, recording)))
+    }
+
+    /// Complete a retranscribe job — just marks it done.
+    pub async fn complete_retranscribe_job(&self, job_id: ObjectId) -> Result<()> {
+        let now = BsonDateTime::from_millis(Utc::now().timestamp_millis());
+        self.processing_jobs().update_one(
+            doc! { "_id": job_id },
+            doc! { "$set": { "status": "done", "updated_at": now } },
+            None,
+        ).await?;
+        Ok(())
+    }
+
+    /// Insert a new AudioRecording document and return its ObjectId.
+    pub async fn insert_audio_recording(
+        &self,
+        rec: &crate::models::AudioRecording,
+    ) -> Result<ObjectId> {
+        let result = self.audio_recordings().insert_one(rec, None).await?;
+        result.inserted_id.as_object_id()
+            .context("insert_audio_recording: no ObjectId in result")
+    }
+
+    /// Insert a Transcription document and return its ObjectId.
+    pub async fn insert_transcription(
+        &self,
+        tx: &crate::models::Transcription,
+    ) -> Result<ObjectId> {
+        let result = self.transcriptions().insert_one(tx, None).await?;
+        result.inserted_id.as_object_id()
+            .context("insert_transcription: no ObjectId in result")
+    }
+
+    /// Find all chunk groups where every chunk transcription is complete.
+    /// Returns Vec of (group_id, original_rec_id, site_id, transcripts_in_order).
+    pub async fn find_completed_chunk_groups(
+        &self,
+    ) -> Result<Vec<(ObjectId, ObjectId, String, Vec<String>)>> {
+        use futures::StreamExt;
+
+        // Find all transcribe jobs that belong to a chunk group and are done
+        let mut cursor = self.processing_jobs()
+            .find(
+                doc! {
+                    "stage":          "transcribe",
+                    "status":         "done",
+                    "chunk_group_id": { "$exists": true },
+                    "chunk_finalized": { "$ne": true },
+                },
+                None,
+            )
+            .await?;
+
+        // Group by chunk_group_id
+        let mut groups: std::collections::HashMap<
+            ObjectId,
+            Vec<(u32, u32, ObjectId, String)>  // (index, total, rec_id, site_id)
+        > = std::collections::HashMap::new();
+
+        while let Some(job) = cursor.next().await {
+            let job = job?;
+            if let (Some(gid), Some(idx), Some(total)) =
+                (job.chunk_group_id, job.chunk_index, job.chunk_total)
+            {
+                groups.entry(gid)
+                    .or_default()
+                    .push((idx, total, job.audio_recording_id, job.site_id));
+            }
+        }
+
+        let mut completed = Vec::new();
+
+        for (group_id, chunks) in groups {
+            let total = chunks[0].1 as usize;
+            if chunks.len() < total { continue; } // not all done yet
+
+            // Get transcripts in order
+            // Use the first chunk's rec_id as the "original" for the parse job
+            // (actually we want the original rec_id — stored on each chunk job)
+            let mut indexed: Vec<(u32, ObjectId, String)> = chunks
+                .into_iter()
+                .map(|(idx, _, rec_id, site_id)| (idx, rec_id, site_id))
+                .collect();
+            indexed.sort_by_key(|(idx, _, _)| *idx);
+
+            let site_id = indexed[0].2.clone();
+            // Use the first chunk's audio_recording as the parent for the combined transcription
+            let rec_id = indexed[0].1;
+
+            // Fetch transcripts for each chunk recording
+            let mut transcripts = Vec::new();
+            let mut ok = true;
+            for (_, chunk_rec_id, _) in &indexed {
+                match self.transcriptions().find_one(
+                    doc! { "audio_recording_id": chunk_rec_id },
+                    None,
+                ).await? {
+                    Some(tx_doc) => {
+                        let tx = tx_doc;
+                        let text = tx.cleaned_transcript
+                            .filter(|s| !s.is_empty())
+                            .unwrap_or(tx.raw_transcript);
+                        transcripts.push(text);
+                    }
+                    None => { ok = false; break; }
+                }
+            }
+
+            if ok && transcripts.len() == total {
+                completed.push((group_id, rec_id, site_id, transcripts));
+            }
+        }
+
+        Ok(completed)
+    }
+
+    /// Mark all chunk transcribe jobs in a group as finalized so they are
+    /// not picked up again.
+    pub async fn mark_chunk_group_finalized(
+        &self,
+        group_id: ObjectId,
+        _tx_id:   ObjectId,
+    ) -> Result<()> {
+        let now = BsonDateTime::from_millis(Utc::now().timestamp_millis());
+        self.processing_jobs().update_many(
+            doc! { "chunk_group_id": group_id },
+            doc! { "$set": { "chunk_finalized": true, "updated_at": now } },
+            None,
+        ).await?;
+        Ok(())
+    }
 }

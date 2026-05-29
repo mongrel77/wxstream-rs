@@ -210,6 +210,19 @@ fn validate_sky(sky: &mut Vec<ParsedSky>, result: &mut ValidationResult) {
                     false,
                 );
                 to_clear.push(i);
+            } else if layer.height_ft.unwrap() % 100 != 0 {
+                // AWOS always reports sky in whole hundreds of feet.
+                // A non-multiple of 100 indicates Whisper hallucination or
+                // bleed from another field (e.g. altimeter digits in sky altitude).
+                result.warn(
+                    "sky",
+                    &format!(
+                        "{} at {} ft is not a multiple of 100 ft — likely hallucination",
+                        layer.coverage, ht
+                    ),
+                    false,
+                );
+                to_clear.push(i);
             }
         }
     }

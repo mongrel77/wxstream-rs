@@ -146,6 +146,30 @@ pub async fn run(
                         } else {
                             tracing::info!("[{}] No warnings - skipping quality job", site_id);
                         }
+
+                        // Retranscribe check: trigger if hallucination is flagged.
+                        // Severe repetition (7+ wind or 8+ sky phrases) indicates the
+                        // transcript is too corrupt to trust even if some fields parsed.
+                        // Only attempted once.
+                        let has_hallucination = metar.audit_warnings.iter()
+                            .any(|w| w.contains("hallucination"));
+
+                        if has_hallucination {
+                            match db.try_create_retranscribe_job(rec_id, site_id.clone()).await {
+                                Ok(true) => tracing::info!(
+                                    "[{}] Retranscribe job created (hallucination + null fields)",
+                                    site_id
+                                ),
+                                Ok(false) => tracing::info!(
+                                    "[{}] Retranscribe already attempted, skipping",
+                                    site_id
+                                ),
+                                Err(e) => tracing::warn!(
+                                    "[{}] Failed to create retranscribe job: {}",
+                                    site_id, e
+                                ),
+                            }
+                        }
                     });
                 }
                 Ok(None) => break,

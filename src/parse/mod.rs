@@ -205,7 +205,8 @@ pub fn parse(input: &ParseInput) -> ParsedWeather {
     let mut temp_result = extract_temp_dp(&norm);
     // Fall back to norm_full if temp is implausible OR if dewpoint is missing
     // (last loop may have temp but not dewpoint due to Whisper truncation)
-    let temp_missing_dp = temp_result.display.ends_with("/ N/A") || temp_result.display.ends_with("/ Missing");
+    // Only fall back if dewpoint is N/A (parse failure) — not if sensor is explicitly Missing
+    let temp_missing_dp = temp_result.display.ends_with("/ N/A");
     if is_temp_implausible(&temp_result.display) || temp_missing_dp {
         let full_temp = extract_temp_dp(&norm_full);
         if !is_temp_implausible(&full_temp.display) && !full_temp.display.ends_with("/ N/A") {
@@ -306,7 +307,7 @@ pub fn parse(input: &ParseInput) -> ParsedWeather {
     result.validation_warnings = validation.warnings;
 
     // Run transcript audit — checks for keywords that should have produced values
-    let audit_warnings = audit::audit(&norm_full, &result);
+    let audit_warnings = audit::audit(&norm, &norm_full, &result);
     if !audit_warnings.is_empty() {
         tracing::warn!(
             "Audit warnings for {}: {:?}",
@@ -347,6 +348,7 @@ fn is_vis_invalid(vis: &str) -> bool {
 
 fn is_temp_implausible(disp: &str) -> bool {
     if disp == "N/A" { return true; }
+    if disp == "Missing" { return false; } // Explicitly missing sensor — not implausible
     let vals: Vec<f64> = Regex::new(r"-?[\d.]+").unwrap()
         .find_iter(disp)
         .filter_map(|m| m.as_str().parse().ok())
@@ -401,9 +403,17 @@ fn build_sky(result: &sky::SkyResult) -> Vec<ParsedSky> {
 }
 
 fn extract_temp_value(disp: &str, index: usize) -> Option<String> {
-    if disp == "N/A" || disp == "Missing" { return None; }
+    if disp == "N/A" { return None; }
+    // Preserve "Missing" so downstream can distinguish sensor-missing from parse failure
+    if disp == "Missing" { return Some("Missing".to_string()); }
     let parts: Vec<&str> = disp.split(" / ").collect();
-    parts.get(index).map(|s| s.trim_end_matches("°C").to_string())
+    // Individual parts may also be N/A or Missing (e.g. "17°C / N/A")
+    parts.get(index).and_then(|s| {
+        let s = s.trim_end_matches("°C");
+        if s == "N/A" { None }
+        else if s == "Missing" { Some("Missing".to_string()) }
+        else { Some(s.to_string()) }
+    })
 }
 
 fn extract_density_altitude(remarks: &str) -> Option<String> {
